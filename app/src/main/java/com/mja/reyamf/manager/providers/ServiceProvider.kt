@@ -87,13 +87,12 @@ class ServiceProvider : ContentProvider() {
 
     private fun isSystemUiCaller(uid: Int, pkg: String?): Boolean {
         if (pkg != SYSTEM_UI_PACKAGE) return false
+        val ctx = context ?: return false
         val expectedUid = runCatching {
-            packageManager?.getPackageUid(SYSTEM_UI_PACKAGE, 0) ?: -1
+            ctx.packageManager.getPackageUid(SYSTEM_UI_PACKAGE, 0)
         }.getOrDefault(-1)
         if (expectedUid <= 0 || uid != expectedUid) return false
-        val appOps = runCatching {
-            context?.getSystemService(AppOpsManager::class.java)
-        }.getOrNull() ?: return false
+        val appOps = ctx.getSystemService(AppOpsManager::class.java) ?: return false
         return runCatching { appOps.checkPackage(uid, SYSTEM_UI_PACKAGE) }.getOrDefault(false)
     }
 
