@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+<com.mja.reyamf.xposed.ui.window.TouchTraceCardView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/root"
     android:layout_width="match_parent"
@@ -12,14 +12,14 @@
     app:cardElevation="0dp"
     app:strokeWidth="0dp">
 
-    <LinearLayout
+    <com.mja.reyamf.xposed.ui.window.TouchTraceLinearLayout
         android:id="@+id/windowColumn"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:background="?attr/colorSurface"
         android:orientation="vertical">
 
-        <FrameLayout
+        <com.mja.reyamf.xposed.ui.window.TouchTraceFrameLayout
             android:id="@+id/contentFrame"
             android:layout_width="match_parent"
             android:layout_height="0dp"
@@ -28,14 +28,14 @@
             android:clipToPadding="true">
 
             <!-- BOTTOMMOST CHILD: full-bleed VirtualDisplay surface. -->
-            <TextureView
+            <com.mja.reyamf.xposed.ui.window.TouchTraceTextureView
                 android:id="@+id/viewTexture"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:visibility="visible" />
 
             <!-- All touch controls MUST remain after TextureView in child order. -->
-            <FrameLayout
+            <com.mja.reyamf.xposed.ui.window.TouchTraceFrameLayout
                 android:id="@+id/topHandle"
                 android:layout_width="64dp"
                 android:layout_height="24dp"
@@ -44,13 +44,13 @@
                 android:contentDescription="Window controls and drag handle"
                 android:focusable="false">
 
-                <ImageView
+                <com.mja.reyamf.xposed.ui.window.TouchTraceImageView
                     android:layout_width="24dp"
                     android:layout_height="8dp"
                     android:layout_gravity="center"
                     android:contentDescription="@null"
                     android:src="@drawable/ic_three_dots" />
-            </FrameLayout>
+            </com.mja.reyamf.xposed.ui.window.TouchTraceFrameLayout>
 
             <LinearLayout
                 android:id="@+id/topQuickMenu"
@@ -105,7 +105,7 @@
                     android:textSize="12sp" />
             </LinearLayout>
 
-            <View
+            <com.mja.reyamf.xposed.ui.window.TouchTraceView
                 android:id="@+id/resizeBottomLeft"
                 android:layout_width="32dp"
                 android:layout_height="32dp"
@@ -115,7 +115,7 @@
                 android:contentDescription="@string/resize_desc"
                 android:focusable="false" />
 
-            <View
+            <com.mja.reyamf.xposed.ui.window.TouchTraceView
                 android:id="@+id/resizeBottomRight"
                 android:layout_width="32dp"
                 android:layout_height="32dp"
@@ -124,9 +124,9 @@
                 android:clickable="true"
                 android:contentDescription="@string/resize_desc"
                 android:focusable="false" />
-        </FrameLayout>
+        </com.mja.reyamf.xposed.ui.window.TouchTraceFrameLayout>
 
-        <FrameLayout
+        <com.mja.reyamf.xposed.ui.window.TouchTraceFrameLayout
             android:id="@+id/bottomBar"
             android:layout_width="match_parent"
             android:layout_height="16dp"
@@ -134,11 +134,11 @@
             android:clickable="true"
             android:focusable="false">
 
-            <View
+            <com.mja.reyamf.xposed.ui.window.TouchTraceView
                 android:layout_width="48dp"
                 android:layout_height="4dp"
                 android:layout_gravity="center"
                 android:background="@drawable/bg_pill_handle" />
-        </FrameLayout>
-    </LinearLayout>
-</com.google.android.material.card.MaterialCardView>
+        </com.mja.reyamf.xposed.ui.window.TouchTraceFrameLayout>
+    </com.mja.reyamf.xposed.ui.window.TouchTraceLinearLayout>
+</com.mja.reyamf.xposed.ui.window.TouchTraceCardView>

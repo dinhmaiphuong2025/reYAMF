@@ -15,6 +15,7 @@ import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.os.SystemClock
 import android.util.Log
+import android.util.AttributeSet
 import android.util.TypedValue
 import android.view.Display
 import android.view.GestureDetector
@@ -338,6 +339,7 @@ class AppWindow(
             val ph = pendingHeight
             pendingWidth = 0
             pendingHeight = 0
+            Log.d("SIZE_COMMIT_TRACE", "commit source=surface-available req=${pw}x$ph displayId=$displayId")
             applyVirtualDisplaySize(pw, ph)
         }
     }
@@ -375,9 +377,16 @@ class AppWindow(
         if (width <= 0 || height <= 0 || destroyed) return
         val vd = virtualDisplay
         val texture = binding.viewTexture.surfaceTexture
+        Log.d(
+            "SIZE_COMMIT_TRACE",
+            "apply req=${width}x$height texture=${binding.viewTexture.width}x${binding.viewTexture.height} " +
+                "root=${binding.root.width}x${binding.root.height} params=${currentParams().width}x${currentParams().height} " +
+                "vd=${vdWidth}x$vdHeight state=${if (vd == null) "no-vd" else if (texture == null) "no-surface" else "ready"} displayId=$displayId"
+        )
         if (vd == null || texture == null) {
             pendingWidth = width
             pendingHeight = height
+            Log.d("SIZE_COMMIT_TRACE", "pending-store ${width}x$height")
             return
         }
         newDpi = calculateDpi(width, height, calculateScreenInches(width, height)) - config.reduceDPI
@@ -386,6 +395,7 @@ class AppWindow(
         vd.resize(width, height, newDpi)
         vdWidth = width
         vdHeight = height
+        Log.d("SIZE_COMMIT_TRACE", "resized req=${width}x$height -> vd=${vdWidth}x$vdHeight dpi=$newDpi")
         Log.d("SIZE_DEBUG", "applied vd=${vd.display.width}x${vd.display.height} dpi=$newDpi")
     }
 
@@ -405,6 +415,12 @@ class AppWindow(
             ) {
                 if (right - left <= 0 || bottom - top <= 0) return
                 texture.removeOnLayoutChangeListener(this)
+                Log.d(
+                    "SIZE_COMMIT_TRACE",
+                    "commit source=layout-listener req=${right - left}x${bottom - top} " +
+                        "texture=${texture.width}x${texture.height} root=${binding.root.width}x${binding.root.height} " +
+                        "params=${currentParams().width}x${currentParams().height} vd=${vdWidth}x$vdHeight pending=${pendingWidth}x$pendingHeight displayId=$displayId"
+                )
                 applyVirtualDisplaySize(right - left, bottom - top)
             }
         }
@@ -413,6 +429,12 @@ class AppWindow(
         texture.postDelayed({
             texture.removeOnLayoutChangeListener(listener)
             if (texture.width > 0 && texture.height > 0) {
+                Log.d(
+                    "SIZE_COMMIT_TRACE",
+                    "commit source=fallback-120ms req=${texture.width}x${texture.height} " +
+                        "root=${binding.root.width}x${binding.root.height} params=${currentParams().width}x${currentParams().height} " +
+                        "vd=${vdWidth}x$vdHeight pending=${pendingWidth}x$pendingHeight displayId=$displayId"
+                )
                 applyVirtualDisplaySize(texture.width, texture.height)
             }
         }, RESIZE_COMMIT_FALLBACK_MS)
@@ -608,6 +630,11 @@ class AppWindow(
 
     inner class SurfaceOnTouchListener : View.OnTouchListener {
         override fun onTouch(v: View, event: MotionEvent): Boolean {
+            Log.d(
+                "SURFACE_TOUCH",
+                "node=${touchTraceName(v)} action=${event.actionMasked} " +
+                    "local=${event.x},${event.y} raw=${event.rawX},${event.rawY}"
+            )
             if (event.actionMasked == MotionEvent.ACTION_DOWN) {
                 hideQuickMenu()
             }
@@ -651,5 +678,98 @@ class AppWindow(
         val heightSqr = height.toFloat().pow(2)
         val diagonalPixels = sqrt(widthSqr + heightSqr)
         return floor(diagonalPixels / screenSizeInInches).toInt()
+    }
+}
+
+// --- DIAGNOSTIC ONLY (PLAN_DIAG_2): dispatch tracing, remove before shipping ---
+
+private fun touchTraceName(view: View): String {
+    val idName = if (view.id == View.NO_ID) "NO_ID" else runCatching {
+        view.resources.getResourceEntryName(view.id)
+    }.getOrDefault(view.id.toString())
+    return "${view.javaClass.simpleName}(id=$idName)"
+}
+
+private fun traceDispatch(view: View, event: MotionEvent, phase: String, handled: Boolean? = null) {
+    Log.d(
+        "TOUCH_TRACE",
+        "$phase node=${touchTraceName(view)} action=${event.actionMasked} " +
+            "local=${event.x},${event.y} raw=${event.rawX},${event.rawY} " +
+            "bounds=${view.left},${view.top},${view.right},${view.bottom} " +
+            "shown=${view.isShown} clickable=${view.isClickable}" +
+            (handled?.let { " handled=$it" } ?: "")
+    )
+}
+
+class TouchTraceCardView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = com.google.android.material.R.attr.materialCardViewStyle
+) : com.google.android.material.card.MaterialCardView(context, attrs, defStyleAttr) {
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        traceDispatch(this, event, "IN")
+        val handled = super.dispatchTouchEvent(event)
+        traceDispatch(this, event, "OUT", handled)
+        return handled
+    }
+}
+
+class TouchTraceLinearLayout @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null
+) : android.widget.LinearLayout(context, attrs) {
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        traceDispatch(this, event, "IN")
+        val handled = super.dispatchTouchEvent(event)
+        traceDispatch(this, event, "OUT", handled)
+        return handled
+    }
+}
+
+class TouchTraceFrameLayout @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null
+) : android.widget.FrameLayout(context, attrs) {
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        traceDispatch(this, event, "IN")
+        val handled = super.dispatchTouchEvent(event)
+        traceDispatch(this, event, "OUT", handled)
+        return handled
+    }
+}
+
+class TouchTraceTextureView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null
+) : TextureView(context, attrs) {
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        traceDispatch(this, event, "IN")
+        val handled = super.dispatchTouchEvent(event)
+        traceDispatch(this, event, "OUT", handled)
+        return handled
+    }
+}
+
+class TouchTraceView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null
+) : View(context, attrs) {
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        traceDispatch(this, event, "IN")
+        val handled = super.dispatchTouchEvent(event)
+        traceDispatch(this, event, "OUT", handled)
+        return handled
+    }
+}
+
+class TouchTraceImageView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null
+) : android.widget.ImageView(context, attrs) {
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        traceDispatch(this, event, "IN")
+        val handled = super.dispatchTouchEvent(event)
+        traceDispatch(this, event, "OUT", handled)
+        return handled
     }
 }
