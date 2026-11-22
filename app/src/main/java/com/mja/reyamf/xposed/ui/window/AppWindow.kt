@@ -354,6 +354,8 @@ class AppWindow(
         private var beginY = 0f
         private var beginWidth = 0
         private var beginHeight = 0
+        private var targetWidth = 0
+        private var targetHeight = 0
 
         override fun onTouch(v: View, event: MotionEvent): Boolean {
             when (event.action) {
@@ -362,21 +364,24 @@ class AppWindow(
                     beginY = event.rawY
                     beginWidth = surfaceView.width
                     beginHeight = surfaceView.height
-                    isResize = true
+                    targetWidth = beginWidth
+                    targetHeight = beginHeight
+                    isResize = false
                     return true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (event.rawX - beginX).toInt()
                     val dy = (event.rawY - beginY).toInt()
-                    val targetWidth = if (isLeft) beginWidth - dx else beginWidth + dx
-                    val targetHeight = beginHeight + dy
+                    targetWidth = if (isLeft) beginWidth - dx else beginWidth + dx
+                    targetHeight = beginHeight + dy
+                    return true
+                }
+                MotionEvent.ACTION_UP -> {
+                    isResize = true
                     surfaceView.updateLayoutParams {
                         if (targetWidth > minWidth) width = targetWidth
                         if (targetHeight > minHeight) height = targetHeight
                     }
-                    return true
-                }
-                MotionEvent.ACTION_UP -> {
                     moveToTopIfNeed(event)
                     return true
                 }
