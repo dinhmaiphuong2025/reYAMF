@@ -7,6 +7,7 @@ import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.SurfaceTexture
 import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
 import android.util.Log
 import android.util.TypedValue
 import android.view.Display
@@ -65,6 +66,7 @@ class SystemUiAppWindow(
     lateinit var binding: WindowAppBinding
     private val wm = context.getSystemService(WindowManager::class.java)
     private lateinit var config: Config
+    private var virtualDisplay: VirtualDisplay? = null
 
     var displayId = -1
         private set
@@ -236,6 +238,8 @@ class SystemUiAppWindow(
         quickMenuHideJob?.cancel()
         quickMenuHideJob = null
         if (displayId >= 0) {
+            runCatching { virtualDisplay?.release() }
+            virtualDisplay = null
             runCatching { client.releaseWindow(clientId, displayId) }
             onClosed(displayId)
         }
@@ -272,29 +276,44 @@ class SystemUiAppWindow(
         surface.setDefaultBufferSize(w, h)
 
         if (displayId < 0) {
-            val newDisplayId = runCatching {
-                client.createVirtualDisplay(clientId, Surface(surface), w, h, newDpi, flags)
+            // Phải tạo VirtualDisplay TẠI SystemUI: Surface thuộc uid này, tạo hộ từ
+            // system_server sẽ bị SecurityException "packageName must match the owner uid".
+            val vd = runCatching {
+                val dm = context.getSystemService(DisplayManager::class.java)
+                    ?: error("no DisplayManager")
+                dm.createVirtualDisplay(
+                    "yamf${System.currentTimeMillis()}",
+                    w,
+                    h,
+                    newDpi,
+                    Surface(surface),
+                    flags
+                )
             }.getOrElse { t ->
                 Log.e(TAG, "createVirtualDisplay threw", t)
-                -1
+                null
             }
-            if (newDisplayId < 0) {
+            if (vd == null) {
                 Log.e(TAG, "createVirtualDisplay failed ${w}x$h dpi=$newDpi")
                 return
             }
-            displayId = newDisplayId
+            virtualDisplay = vd
+            displayId = vd.display.displayId
             vdWidth = w
             vdHeight = h
-            Log.d("SIZE_DEBUG", "created vd=${w}x$h dpi=$newDpi flags=$flags displayId=$displayId")
+            Log.d("SIZE_DEBUG", "created vd=${vd.display.width}x${vd.display.height} dpi=$newDpi flags=$flags displayId=$displayId")
+            val policy = if (config.showImeInWindow) 1 else 0
+            runCatching { client.setDisplayImePolicy(clientId, displayId, policy) }
+                .onFailure { Log.w(TAG, "setDisplayImePolicy failed displayId=$displayId", it) }
             if (!createdCallbackSent) {
                 createdCallbackSent = true
                 onDisplayCreated?.invoke(displayId)
             }
         } else {
-            runCatching { client.setVirtualDisplaySurface(clientId, displayId, Surface(surface)) }
-                .onFailure { Log.e(TAG, "setVirtualDisplaySurface failed displayId=$displayId", it) }
+            runCatching { virtualDisplay?.surface = Surface(surface) }
+                .onFailure { Log.e(TAG, "reattach surface failed displayId=$displayId", it) }
             if (w != vdWidth || h != vdHeight) {
-                runCatching { client.resizeVirtualDisplay(clientId, displayId, w, h, newDpi) }
+                runCatching { virtualDisplay?.resize(w, h, newDpi) }
                     .onFailure { Log.e(TAG, "resizeVirtualDisplay failed displayId=$displayId", it) }
                 vdWidth = w
                 vdHeight = h
@@ -317,9 +336,7 @@ class SystemUiAppWindow(
     }
 
     override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-        if (displayId >= 0) {
-            runCatching { client.clearVirtualDisplaySurface(clientId, displayId) }
-        }
+        runCatching { virtualDisplay?.surface = null }
         return true
     }
 
@@ -336,7 +353,7 @@ class SystemUiAppWindow(
         newDpi = calculateDpi(width, height, calculateScreenInches(width, height)) - config.reduceDPI
         texture.setDefaultBufferSize(width, height)
         if (width == vdWidth && height == vdHeight) return
-        runCatching { client.resizeVirtualDisplay(clientId, displayId, width, height, newDpi) }
+        runCatching { virtualDisplay?.resize(width, height, newDpi) }
             .onFailure { Log.e(TAG, "resizeVirtualDisplay failed displayId=$displayId", it) }
         vdWidth = width
         vdHeight = height

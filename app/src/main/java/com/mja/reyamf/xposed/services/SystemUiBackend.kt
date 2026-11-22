@@ -262,17 +262,28 @@ object SystemUiBackend {
         inject(KeyEvent.ACTION_UP)
     }
 
-    /** Trả về client nếu clientId tồn tại và sở hữu displayId; ngược lại log và trả null. */
+    /**
+     * Stage 3a: VirtualDisplay do SystemUI tạo (Surface thuộc SystemUI, tạo hộ từ
+     * system_server sẽ bị "packageName must match the owner uid"). Backend chỉ xác thực
+     * client + sự tồn tại của display tên "yamf..." rồi đăng ký quyền sở hữu.
+     */
     private fun ownedClient(clientId: Long, displayId: Int): Client? {
         val client = clients[clientId]
         if (client == null) {
             Log.w(TAG, "unknown clientId=$clientId (displayId=$displayId)")
             return null
         }
-        if (displayOwners[displayId] != clientId) {
-            Log.w(TAG, "displayId=$displayId not owned by clientId=$clientId")
+        val display = runCatching { Instances.displayManager.getDisplay(displayId) }.getOrNull()
+        if (display == null) {
+            Log.w(TAG, "displayId=$displayId does not exist (clientId=$clientId)")
             return null
         }
+        if (!display.name.orEmpty().startsWith("yamf")) {
+            Log.w(TAG, "displayId=$displayId name=${display.name} is not a reYAMF display")
+            return null
+        }
+        displayOwners[displayId] = clientId
+        client.displays.add(displayId)
         return client
     }
 }
