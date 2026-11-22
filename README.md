@@ -85,6 +85,13 @@ A fork of YAMF (forked from [YAMFSquared](https://github.com/kaii-lb/YAMFsquared
                     <sub><b>No.22</b></sub>
                 </a>
             </td>
+            <td align="center">
+                <a href="https://github.com/dinhmaiphuong2025">
+                    <img src="https://avatars.githubusercontent.com/u/323653174?v=4" width="100;" alt="dinhmaiphuong2025"/>
+                    <br />
+                    <sub><b>Quang Đới</b></sub>
+                </a>
+            </td>
 		</tr>
 	<tbody>
 </table>
