@@ -25,8 +25,8 @@
         app:layout_constraintTop_toTopOf="parent">
 
         <FrameLayout
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             android:clipChildren="false"
             android:clipToPadding="false">
 
@@ -38,8 +38,7 @@
             <TextureView
                 android:id="@+id/viewTexture"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:visibility="gone" />
+                android:layout_height="wrap_content" />
 
             <!-- Top pill: transparent touch target (drag / tap / double-tap) -->
             <View
