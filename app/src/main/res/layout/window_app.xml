@@ -12,117 +12,125 @@
     app:cardElevation="0dp"
     app:strokeWidth="0dp">
 
-    <FrameLayout
-        android:id="@+id/contentFrame"
+    <LinearLayout
+        android:id="@+id/windowColumn"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:clipChildren="true"
-        android:clipToPadding="true">
+        android:background="?attr/colorSurface"
+        android:orientation="vertical">
 
-        <!-- BOTTOMMOST CHILD: full-bleed VirtualDisplay surface. -->
-        <TextureView
-            android:id="@+id/viewTexture"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:visibility="visible" />
-
-        <!-- All touch controls MUST remain after TextureView in child order. -->
         <FrameLayout
-            android:id="@+id/topHandle"
-            android:layout_width="64dp"
-            android:layout_height="24dp"
-            android:layout_gravity="top|center_horizontal"
-            android:clickable="true"
-            android:contentDescription="Window controls and drag handle"
-            android:focusable="false">
+            android:id="@+id/contentFrame"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:clipChildren="true"
+            android:clipToPadding="true">
 
-            <ImageView
-                android:layout_width="24dp"
-                android:layout_height="8dp"
-                android:layout_gravity="center"
-                android:contentDescription="@null"
-                android:src="@drawable/ic_three_dots" />
+            <!-- BOTTOMMOST CHILD: full-bleed VirtualDisplay surface. -->
+            <TextureView
+                android:id="@+id/viewTexture"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="visible" />
+
+            <!-- All touch controls MUST remain after TextureView in child order. -->
+            <FrameLayout
+                android:id="@+id/topHandle"
+                android:layout_width="64dp"
+                android:layout_height="24dp"
+                android:layout_gravity="top|center_horizontal"
+                android:clickable="true"
+                android:contentDescription="Window controls and drag handle"
+                android:focusable="false">
+
+                <ImageView
+                    android:layout_width="24dp"
+                    android:layout_height="8dp"
+                    android:layout_gravity="center"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_three_dots" />
+            </FrameLayout>
+
+            <LinearLayout
+                android:id="@+id/topQuickMenu"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_gravity="top|center_horizontal"
+                android:background="@drawable/bg_quick_menu_pill"
+                android:gravity="center"
+                android:orientation="horizontal"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/btnFullscreen"
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:background="?android:attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:minWidth="72dp"
+                    android:paddingHorizontal="10dp"
+                    android:text="Fullscreen"
+                    android:textColor="?attr/colorOnSurface"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/btnMini"
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:background="?android:attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:minWidth="56dp"
+                    android:paddingHorizontal="10dp"
+                    android:text="Mini"
+                    android:textColor="?attr/colorOnSurface"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/btnClose"
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:background="?android:attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:minWidth="56dp"
+                    android:paddingHorizontal="10dp"
+                    android:text="Close"
+                    android:textColor="?attr/colorOnSurface"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
+            <View
+                android:id="@+id/resizeBottomLeft"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_gravity="bottom|start"
+                android:background="@android:color/transparent"
+                android:clickable="true"
+                android:contentDescription="@string/resize_desc"
+                android:focusable="false" />
+
+            <View
+                android:id="@+id/resizeBottomRight"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_gravity="bottom|end"
+                android:background="@android:color/transparent"
+                android:clickable="true"
+                android:contentDescription="@string/resize_desc"
+                android:focusable="false" />
         </FrameLayout>
-
-        <LinearLayout
-            android:id="@+id/topQuickMenu"
-            android:layout_width="wrap_content"
-            android:layout_height="36dp"
-            android:layout_gravity="top|center_horizontal"
-            android:background="@drawable/bg_quick_menu_pill"
-            android:gravity="center"
-            android:orientation="horizontal"
-            android:visibility="gone">
-
-            <TextView
-                android:id="@+id/btnFullscreen"
-                android:layout_width="wrap_content"
-                android:layout_height="match_parent"
-                android:background="?android:attr/selectableItemBackground"
-                android:clickable="true"
-                android:focusable="true"
-                android:gravity="center"
-                android:minWidth="72dp"
-                android:paddingHorizontal="10dp"
-                android:text="Fullscreen"
-                android:textColor="?attr/colorOnSurface"
-                android:textSize="12sp" />
-
-            <TextView
-                android:id="@+id/btnMini"
-                android:layout_width="wrap_content"
-                android:layout_height="match_parent"
-                android:background="?android:attr/selectableItemBackground"
-                android:clickable="true"
-                android:focusable="true"
-                android:gravity="center"
-                android:minWidth="56dp"
-                android:paddingHorizontal="10dp"
-                android:text="Mini"
-                android:textColor="?attr/colorOnSurface"
-                android:textSize="12sp" />
-
-            <TextView
-                android:id="@+id/btnClose"
-                android:layout_width="wrap_content"
-                android:layout_height="match_parent"
-                android:background="?android:attr/selectableItemBackground"
-                android:clickable="true"
-                android:focusable="true"
-                android:gravity="center"
-                android:minWidth="56dp"
-                android:paddingHorizontal="10dp"
-                android:text="Close"
-                android:textColor="?attr/colorOnSurface"
-                android:textSize="12sp" />
-        </LinearLayout>
-
-        <View
-            android:id="@+id/resizeBottomLeft"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:layout_gravity="bottom|start"
-            android:background="@android:color/transparent"
-            android:clickable="true"
-            android:contentDescription="@string/resize_desc"
-            android:focusable="false" />
-
-        <View
-            android:id="@+id/resizeBottomRight"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:layout_gravity="bottom|end"
-            android:background="@android:color/transparent"
-            android:clickable="true"
-            android:contentDescription="@string/resize_desc"
-            android:focusable="false" />
 
         <FrameLayout
             android:id="@+id/bottomBar"
-            android:layout_width="96dp"
-            android:layout_height="20dp"
-            android:layout_gravity="bottom|center_horizontal"
-            android:background="@android:color/transparent"
+            android:layout_width="match_parent"
+            android:layout_height="16dp"
+            android:background="?attr/colorSurface"
             android:clickable="true"
             android:focusable="false">
 
@@ -132,5 +140,5 @@
                 android:layout_gravity="center"
                 android:background="@drawable/bg_pill_handle" />
         </FrameLayout>
-    </FrameLayout>
+    </LinearLayout>
 </com.google.android.material.card.MaterialCardView>

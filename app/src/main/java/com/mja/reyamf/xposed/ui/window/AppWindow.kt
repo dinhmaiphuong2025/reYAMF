@@ -165,6 +165,10 @@ class AppWindow(
         binding.resizeBottomLeft.setOnTouchListener(cornerResizeListener(isLeft = true))
         binding.resizeBottomRight.setOnTouchListener(cornerResizeListener(isLeft = false))
         binding.topHandle.bringToFront()
+        binding.topQuickMenu.bringToFront()
+        binding.resizeBottomLeft.bringToFront()
+        binding.resizeBottomRight.bringToFront()
+        binding.bottomBar.bringToFront()
 
         binding.btnFullscreen.setOnClickListener { transitionTo(WindowState.FULLSCREEN) }
         binding.btnMini.setOnClickListener {
@@ -185,8 +189,8 @@ class AppWindow(
         binding.root.post {
             animateAlpha(binding.root, 0f, 1f)
             Log.d("SIZE_DEBUG", "post: root w=${binding.root.width} h=${binding.root.height}")
-            Log.d("SIZE_DEBUG", "post: topHandle w=${binding.topHandle.width} h=${binding.topHandle.height}")
-            Log.d("SIZE_DEBUG", "post: bottomBar w=${binding.bottomBar.width} h=${binding.bottomBar.height}")
+            Log.d("SIZE_DEBUG", "post: topHandle w=${binding.topHandle.width} h=${binding.topHandle.height} l=${binding.topHandle.left} t=${binding.topHandle.top} r=${binding.topHandle.right} b=${binding.topHandle.bottom}")
+            Log.d("SIZE_DEBUG", "post: bottomBar w=${binding.bottomBar.width} h=${binding.bottomBar.height} l=${binding.bottomBar.left} t=${binding.bottomBar.top} r=${binding.bottomBar.right} b=${binding.bottomBar.bottom}")
             Log.d("SIZE_DEBUG", "post: texture w=${binding.viewTexture.width} h=${binding.viewTexture.height}")
         }
     }
@@ -426,6 +430,7 @@ class AppWindow(
         private var dragging = false
 
         override fun onTouch(v: View, event: MotionEvent): Boolean {
+            Log.d("CONTROL_TOUCH", "topHandle action=${event.actionMasked} x=${event.x} y=${event.y}")
             topHandleDetector.onTouchEvent(event)
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -464,6 +469,7 @@ class AppWindow(
         private var downRawY = 0f
 
         override fun onTouch(v: View, event: MotionEvent): Boolean {
+            Log.d("CONTROL_TOUCH", "bottomBar action=${event.actionMasked} x=${event.x} y=${event.y}")
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downRawY = event.rawY
