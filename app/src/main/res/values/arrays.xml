@@ -7,5 +7,6 @@
         <item>com.google.android.apps.nexuslauncher</item>
         <item>com.google.android.permissioncontroller</item>
         <item>com.android.permissioncontroller</item>
+        <item>com.android.systemui</item>
     </string-array>
 </resources>
