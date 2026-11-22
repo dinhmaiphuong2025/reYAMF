@@ -23,14 +23,11 @@ import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.Surface
-import android.view.SurfaceHolder
-import android.view.SurfaceView
 import android.view.TextureView
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.view.WindowManagerHidden
-import androidx.core.view.updateLayoutParams
 import com.github.kyuubiran.ezxhelper.utils.argTypes
 import com.github.kyuubiran.ezxhelper.utils.args
 import com.github.kyuubiran.ezxhelper.utils.invokeMethod
@@ -42,7 +39,6 @@ import com.mja.reyamf.xposed.services.YAMFManager.config
 import com.mja.reyamf.xposed.utils.Instances
 import com.mja.reyamf.xposed.utils.TipUtil
 import com.mja.reyamf.xposed.utils.animateAlpha
-import com.mja.reyamf.xposed.utils.dpToPx
 import com.mja.reyamf.xposed.utils.log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -59,17 +55,20 @@ class AppWindow(
     val context: Context,
     private val flags: Int,
     private val onVirtualDisplayCreated: (Int) -> Unit
-) : TextureView.SurfaceTextureListener, SurfaceHolder.Callback {
+) : TextureView.SurfaceTextureListener {
 
     companion object {
         const val TAG = "reYAMF_AppWindow"
         const val ACTION_RESET_ALL_WINDOW = "com.mja.reyamf.ui.window.action.ACTION_RESET_ALL_WINDOW"
-        private const val DOUBLE_TAP_DELTA = 300L
-        private const val FLING_THRESHOLD = 1000f
+        private const val QUICK_MENU_TIMEOUT = 2500L
+        private const val BOTTOM_SWIPE_UP_CLOSE_PX = 60f
+        private const val BOTTOM_SWIPE_DOWN_FULLSCREEN_PX = 80f
+        private const val BOTTOM_TAP_BACK_PX = 15f
+        private const val RESIZE_COMMIT_FALLBACK_MS = 120L
     }
 
     lateinit var binding: WindowAppBinding
-    private lateinit var virtualDisplay: VirtualDisplay
+    private var virtualDisplay: VirtualDisplay? = null
     private val taskStackListener =
         ITaskStackListenerProxy.newInstance(context.classLoader) { _, method ->
             when (method.name) {
@@ -81,30 +80,30 @@ class AppWindow(
     private val surfaceOnGenericMotionListener = SurfaceOnGenericMotionListener()
 
     var displayId = -1
+        private set
     var rotateLock = false
-    private var halfWidth = 0
-    private var halfHeight = 0
-    lateinit var surfaceView: View
-    private var newDpi = calculateDpi(
-        config.defaultWindowWidth, config.defaultWindowHeight,
-        calculateScreenInches(config.defaultWindowWidth, config.defaultWindowHeight)
-    ) - config.reduceDPI
-    private var originalWidth: Int = 0
-    private var originalHeight: Int = 0
-    private var isResize: Boolean = true
+
+    private var vdWidth = 0
+    private var vdHeight = 0
+    private var pendingWidth = 0
+    private var pendingHeight = 0
+    private var newDpi = 0
     private var orientation = 0
     private var params = WindowManager.LayoutParams()
+    private var destroyed = false
+    private var lifecycleRegistered = false
+    private var createdCallbackSent = false
 
     private var state = WindowState.NORMAL
-    private var quickToolbarHideJob: Job? = null
+    private var quickMenuHideJob: Job? = null
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
-    private val minWidth = 120.dpToPx().toInt()
-    private val minHeight = 160.dpToPx().toInt()
+    private val minWidth = 120.ctxDp()
+    private val minHeight = 160.ctxDp()
 
     private val broadcastReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action == ACTION_RESET_ALL_WINDOW) {
-                val lp = binding.root.layoutParams as WindowManager.LayoutParams
+                val lp = currentParams()
                 lp.apply {
                     x = 0
                     y = 0
@@ -126,20 +125,15 @@ class AppWindow(
     }
 
     private fun doInit() {
-        when (config.surfaceView) {
-            0 -> {
-                surfaceView = binding.viewSurface
-                binding.viewTexture.visibility = View.GONE
-            }
-            else -> {
-                surfaceView = binding.viewTexture
-                binding.viewSurface.visibility = View.GONE
-            }
-        }
+        binding.viewTexture.visibility = View.VISIBLE
+        binding.topQuickMenu.visibility = View.GONE
+
+        val width = config.defaultWindowWidth.ctxDp()
+        val height = config.defaultWindowHeight.ctxDp()
 
         params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            width,
+            height,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
@@ -157,89 +151,63 @@ class AppWindow(
             else -> 0
         }
 
+        val metrics = context.resources.displayMetrics
         params.apply {
-            if (orientation == 0) {
-                gravity = Gravity.CENTER
-                y = -80.dpToPx().toInt()
-            } else {
-                gravity = Gravity.TOP or Gravity.START
-                y = 0
-            }
-            x = 0
+            gravity = Gravity.TOP or Gravity.START
+            x = ((metrics.widthPixels - width) / 2).coerceAtLeast(0)
+            y = ((metrics.heightPixels - height) / 2).coerceAtLeast(0)
         }
 
-        binding.root.let { layout ->
-            Instances.windowManager.addView(layout, params)
-        }
+        Instances.windowManager.addView(binding.root, params)
 
-        binding.topBar.setOnTouchListener(topBarListener)
-        binding.bottomBarTouch.setOnTouchListener { _, event -> bottomBarDetector.onTouchEvent(event) }
-        binding.bottomLeftResize.setOnTouchListener(cornerResizeListener(isLeft = true))
-        binding.bottomRightResize.setOnTouchListener(cornerResizeListener(isLeft = false))
-        binding.topBar.bringToFront()
+        binding.topHandle.setOnTouchListener(topHandleListener)
+        binding.bottomBar.setOnTouchListener(bottomBarListener)
+        binding.resizeBottomLeft.setOnTouchListener(cornerResizeListener(isLeft = true))
+        binding.resizeBottomRight.setOnTouchListener(cornerResizeListener(isLeft = false))
+        binding.topHandle.bringToFront()
 
         binding.btnFullscreen.setOnClickListener { transitionTo(WindowState.FULLSCREEN) }
-        binding.btnEdgeHide.setOnClickListener { transitionTo(WindowState.EDGE_HIDE) }
+        binding.btnMini.setOnClickListener {
+            TipUtil.showToast("Mini mode is not implemented yet")
+        }
         binding.btnClose.setOnClickListener { close() }
 
-        surfaceView.setOnTouchListener(surfaceOnTouchListener)
-        surfaceView.setOnGenericMotionListener(surfaceOnGenericMotionListener)
+        binding.viewTexture.setOnTouchListener(surfaceOnTouchListener)
+        binding.viewTexture.setOnGenericMotionListener(surfaceOnGenericMotionListener)
+        binding.viewTexture.surfaceTextureListener = this
 
-        virtualDisplay = Instances.displayManager.createVirtualDisplay(
-            "yamf${System.currentTimeMillis()}", config.defaultWindowWidth.ctxDp(), config.defaultWindowHeight.ctxDp(), newDpi - config.reduceDPI, null, flags
+        context.registerReceiver(
+            broadcastReceiver,
+            IntentFilter(ACTION_RESET_ALL_WINDOW),
+            Context.RECEIVER_EXPORTED
         )
-        displayId = virtualDisplay.display.displayId
-        (Instances.windowManager as WindowManagerHidden).setDisplayImePolicy(displayId, if (config.showImeInWindow) WindowManagerHidden.DISPLAY_IME_POLICY_LOCAL else WindowManagerHidden.DISPLAY_IME_POLICY_FALLBACK_DISPLAY)
-        Instances.activityTaskManager.registerTaskStackListener(taskStackListener)
-        (surfaceView as? TextureView)?.surfaceTextureListener = this
-        (surfaceView as? SurfaceView)?.holder?.addCallback(this)
 
-        var failCount = 0
-        fun watchRotation() {
-            runCatching {
-                Instances.iWindowManager.watchRotation(rotationWatcher, displayId)
-            }.onFailure {
-                failCount++
-                Log.d(TAG, "watchRotation: fail $failCount")
-                watchRotation()
-            }
-        }
-        watchRotation()
-        context.registerReceiver(broadcastReceiver, IntentFilter(ACTION_RESET_ALL_WINDOW), Context.RECEIVER_EXPORTED)
-
-        val width = config.defaultWindowWidth.ctxDp()
-        val height = config.defaultWindowHeight.ctxDp()
-        surfaceView.updateLayoutParams {
-            this.width = width
-            this.height = height
-        }
-        onVirtualDisplayCreated(displayId)
-
-        isResize = false
-        binding.cvBackground.post {
-            originalWidth = binding.cvBackground.width
-            originalHeight = binding.cvBackground.height
-            binding.cvBackground.radius = config.windowRoundedCorner.dpToPx()
-            binding.cvBackground.visibility = View.VISIBLE
+        binding.root.post {
             animateAlpha(binding.root, 0f, 1f)
-            isResize = true
-            Log.d("TOP_DEBUG", "post: topBar w=${binding.topBar.width} h=${binding.topBar.height} l=${binding.topBar.left} t=${binding.topBar.top} r=${binding.topBar.right} b=${binding.topBar.bottom}")
-            Log.d("TOP_DEBUG", "post: bottomBar w=${binding.bottomBarTouch.width} h=${binding.bottomBarTouch.height} t=${binding.bottomBarTouch.top} b=${binding.bottomBarTouch.bottom}")
-            Log.d("TOP_DEBUG", "post: surface w=${surfaceView.width} h=${surfaceView.height} card w=${binding.cvBackground.width} h=${binding.cvBackground.height}")
+            Log.d("SIZE_DEBUG", "post: root w=${binding.root.width} h=${binding.root.height}")
+            Log.d("SIZE_DEBUG", "post: topHandle w=${binding.topHandle.width} h=${binding.topHandle.height}")
+            Log.d("SIZE_DEBUG", "post: bottomBar w=${binding.bottomBar.width} h=${binding.bottomBar.height}")
+            Log.d("SIZE_DEBUG", "post: texture w=${binding.viewTexture.width} h=${binding.viewTexture.height}")
         }
     }
 
     // --- State machine ---
 
     private fun transitionTo(newState: WindowState) {
-        if (state == newState) return
+        if (destroyed || state == newState) return
         state = newState
         when (newState) {
             WindowState.NORMAL -> Unit
             WindowState.FULLSCREEN -> {
-                getTopRootTask()?.runCatching {
-                    Instances.activityTaskManager.moveRootTaskToDisplay(taskId, 0)
-                }?.onFailure { t ->
+                val task = getTopRootTask()
+                if (task == null) {
+                    TipUtil.showToast("No task running in this window")
+                    state = WindowState.NORMAL
+                    return
+                }
+                runCatching {
+                    Instances.activityTaskManager.moveRootTaskToDisplay(task.taskId, 0)
+                }.onFailure { t ->
                     if (t is Error) throw t
                     TipUtil.showToast("${t.message}")
                 }
@@ -248,6 +216,7 @@ class AppWindow(
             WindowState.MINI, WindowState.EDGE_HIDE -> {
                 // Phase 2
                 log(TAG, "transition to $newState not implemented yet")
+                state = WindowState.NORMAL
             }
         }
     }
@@ -258,15 +227,28 @@ class AppWindow(
     }
 
     private fun onDestroy() {
-        context.unregisterReceiver(broadcastReceiver)
-        Instances.iWindowManager.removeRotationWatcher(rotationWatcher)
-        Instances.activityTaskManager.unregisterTaskStackListener(taskStackListener)
-        YAMFManager.removeWindow(displayId)
-        virtualDisplay.release()
-        Instances.windowManager.removeView(binding.root)
+        if (destroyed) return
+        destroyed = true
+        quickMenuHideJob?.cancel()
+        quickMenuHideJob = null
+        runCatching { context.unregisterReceiver(broadcastReceiver) }
+        if (lifecycleRegistered) {
+            runCatching { Instances.iWindowManager.removeRotationWatcher(rotationWatcher) }
+            runCatching { Instances.activityTaskManager.unregisterTaskStackListener(taskStackListener) }
+            lifecycleRegistered = false
+        }
+        if (displayId >= 0) {
+            YAMFManager.removeWindow(displayId)
+        }
+        virtualDisplay?.let {
+            runCatching { it.release() }
+        }
+        virtualDisplay = null
+        runCatching { Instances.windowManager.removeView(binding.root) }
     }
 
     private fun getTopRootTask(): ActivityTaskManager.RootTaskInfo? {
+        if (displayId < 0) return null
         Instances.activityTaskManager.getAllRootTaskInfosOnDisplay(displayId).forEach { task ->
             if (task.visible) return task
         }
@@ -285,112 +267,190 @@ class AppWindow(
         }
     }
 
-    // --- Gestures ---
+    private fun currentParams() = binding.root.layoutParams as WindowManager.LayoutParams
 
-    private val topBarListener = object : View.OnTouchListener {
-        private var startRawX = 0f
-        private var startRawY = 0f
-        private var startX = 0
-        private var startY = 0
-        private var dragging = false
-        private var lastTapTime = 0L
+    // --- VirtualDisplay lifecycle ---
 
-        override fun onTouch(v: View, event: MotionEvent): Boolean {
-            if (event.action == MotionEvent.ACTION_DOWN) {
-                Log.d("TOP_DEBUG", "topBar.onTouch DOWN x=${event.x} y=${event.y} rawX=${event.rawX} rawY=${event.rawY} w=${v.width} h=${v.height} l=${v.left} t=${v.top} r=${v.right} b=${v.bottom}")
+    override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+        val w = if (width > 0) width else binding.viewTexture.width
+        val h = if (height > 0) height else binding.viewTexture.height
+        if (w <= 0 || h <= 0) {
+            Log.d("SIZE_DEBUG", "onSurfaceTextureAvailable skipped, invalid size ${width}x$height")
+            return
+        }
+        Log.d("SIZE_DEBUG", "onSurfaceTextureAvailable callback=${width}x$height texture=${binding.viewTexture.width}x${binding.viewTexture.height}")
+        Log.d("SIZE_DEBUG", "density context=${context.resources.displayMetrics.density} system=${Resources.getSystem().displayMetrics.density}")
+
+        newDpi = calculateDpi(w, h, calculateScreenInches(w, h)) - config.reduceDPI
+        surface.setDefaultBufferSize(w, h)
+
+        val existing = virtualDisplay
+        if (existing == null) {
+            val vd = Instances.displayManager.createVirtualDisplay(
+                "yamf${System.currentTimeMillis()}", w, h, newDpi, Surface(surface), flags
+            )
+            virtualDisplay = vd
+            displayId = vd.display.displayId
+            vdWidth = w
+            vdHeight = h
+            Log.d("SIZE_DEBUG", "created vd=${vd.display.width}x${vd.display.height} dpi=$newDpi flags=$flags")
+            (Instances.windowManager as WindowManagerHidden).setDisplayImePolicy(
+                displayId,
+                if (config.showImeInWindow) WindowManagerHidden.DISPLAY_IME_POLICY_LOCAL
+                else WindowManagerHidden.DISPLAY_IME_POLICY_FALLBACK_DISPLAY
+            )
+            registerDisplayLifecycle()
+            if (!createdCallbackSent) {
+                createdCallbackSent = true
+                onVirtualDisplayCreated(displayId)
             }
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    val lp = binding.root.layoutParams as WindowManager.LayoutParams
-                    startX = lp.x
-                    startY = lp.y
-                    startRawX = event.rawX
-                    startRawY = event.rawY
-                    dragging = false
-                    return true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = event.rawX - startRawX
-                    val dy = event.rawY - startRawY
-                    if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) dragging = true
-                    if (dragging) {
-                        val lp = binding.root.layoutParams as WindowManager.LayoutParams
-                        lp.x = (startX + dx).toInt()
-                        lp.y = (startY + dy).toInt()
-                        Instances.windowManager.updateViewLayout(binding.root, lp)
-                    }
-                    return true
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (!dragging) {
-                        val now = System.currentTimeMillis()
-                        if (now - lastTapTime < DOUBLE_TAP_DELTA) {
-                            lastTapTime = 0
-                            transitionTo(WindowState.FULLSCREEN)
-                        } else {
-                            lastTapTime = now
-                            toggleQuickToolbar()
-                        }
-                    }
-                    moveToTopIfNeed(event)
-                    return true
-                }
+        } else {
+            existing.surface = Surface(surface)
+            if (w != vdWidth || h != vdHeight) {
+                existing.resize(w, h, newDpi)
+                vdWidth = w
+                vdHeight = h
             }
-            return false
+            Log.d("SIZE_DEBUG", "reattached vd=${existing.display.width}x${existing.display.height} dpi=$newDpi")
+            registerDisplayLifecycle()
+        }
+
+        if (pendingWidth > 0 && pendingHeight > 0) {
+            val pw = pendingWidth
+            val ph = pendingHeight
+            pendingWidth = 0
+            pendingHeight = 0
+            applyVirtualDisplaySize(pw, ph)
         }
     }
 
-    private val bottomBarDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+    override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
+        // Intentionally empty: VirtualDisplay resize is committed only on resize ACTION_UP.
+        Log.d("SIZE_DEBUG", "onSurfaceTextureSizeChanged ${width}x$height (no vd resize)")
+    }
+
+    override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+        virtualDisplay?.surface = null
+        return true
+    }
+
+    override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+
+    private fun registerDisplayLifecycle() {
+        if (lifecycleRegistered) return
+        lifecycleRegistered = true
+        Instances.activityTaskManager.registerTaskStackListener(taskStackListener)
+        var failCount = 0
+        fun watchRotation() {
+            runCatching {
+                Instances.iWindowManager.watchRotation(rotationWatcher, displayId)
+            }.onFailure {
+                failCount++
+                Log.d(TAG, "watchRotation: fail $failCount")
+                if (failCount < 20) watchRotation()
+            }
+        }
+        watchRotation()
+    }
+
+    private fun applyVirtualDisplaySize(width: Int, height: Int) {
+        if (width <= 0 || height <= 0 || destroyed) return
+        val vd = virtualDisplay
+        val texture = binding.viewTexture.surfaceTexture
+        if (vd == null || texture == null) {
+            pendingWidth = width
+            pendingHeight = height
+            return
+        }
+        newDpi = calculateDpi(width, height, calculateScreenInches(width, height)) - config.reduceDPI
+        texture.setDefaultBufferSize(width, height)
+        if (width == vdWidth && height == vdHeight) return
+        vd.resize(width, height, newDpi)
+        vdWidth = width
+        vdHeight = height
+        Log.d("SIZE_DEBUG", "applied vd=${vd.display.width}x${vd.display.height} dpi=$newDpi")
+    }
+
+    private fun commitVirtualDisplaySize() {
+        val texture = binding.viewTexture
+        val listener = object : View.OnLayoutChangeListener {
+            override fun onLayoutChange(
+                v: View,
+                left: Int,
+                top: Int,
+                right: Int,
+                bottom: Int,
+                oldLeft: Int,
+                oldTop: Int,
+                oldRight: Int,
+                oldBottom: Int
+            ) {
+                if (right - left <= 0 || bottom - top <= 0) return
+                texture.removeOnLayoutChangeListener(this)
+                applyVirtualDisplaySize(right - left, bottom - top)
+            }
+        }
+        texture.addOnLayoutChangeListener(listener)
+        texture.requestLayout()
+        texture.postDelayed({
+            texture.removeOnLayoutChangeListener(listener)
+            if (texture.width > 0 && texture.height > 0) {
+                applyVirtualDisplaySize(texture.width, texture.height)
+            }
+        }, RESIZE_COMMIT_FALLBACK_MS)
+    }
+
+    // --- Gestures ---
+
+    private val topHandleDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent): Boolean = true
 
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-            sendBackKey()
+            showQuickMenu()
             return true
         }
 
-        override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
-            if (velocityY < -FLING_THRESHOLD) {
-                close()
-            } else if (velocityY > FLING_THRESHOLD) {
-                transitionTo(WindowState.FULLSCREEN)
-            }
+        override fun onDoubleTap(e: MotionEvent): Boolean {
+            hideQuickMenu()
+            transitionTo(WindowState.FULLSCREEN)
             return true
         }
     })
 
-    private fun cornerResizeListener(isLeft: Boolean) = object : View.OnTouchListener {
-        private var beginX = 0f
-        private var beginY = 0f
-        private var beginWidth = 0
-        private var beginHeight = 0
-        private var targetWidth = 0
-        private var targetHeight = 0
+    private val topHandleListener = object : View.OnTouchListener {
+        private var downRawX = 0f
+        private var downRawY = 0f
+        private var startWindowX = 0
+        private var startWindowY = 0
+        private var dragging = false
 
         override fun onTouch(v: View, event: MotionEvent): Boolean {
-            when (event.action) {
+            topHandleDetector.onTouchEvent(event)
+            when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    beginX = event.rawX
-                    beginY = event.rawY
-                    beginWidth = surfaceView.width
-                    beginHeight = surfaceView.height
-                    targetWidth = beginWidth
-                    targetHeight = beginHeight
-                    isResize = false
+                    val lp = currentParams()
+                    downRawX = event.rawX
+                    downRawY = event.rawY
+                    startWindowX = lp.x
+                    startWindowY = lp.y
+                    dragging = false
+                    Log.d("TOP_DEBUG", "topHandle DOWN raw=${event.rawX},${event.rawY} w=${v.width} h=${v.height}")
                     return true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = (event.rawX - beginX).toInt()
-                    val dy = (event.rawY - beginY).toInt()
-                    targetWidth = if (isLeft) beginWidth - dx else beginWidth + dx
-                    targetHeight = beginHeight + dy
+                    val dx = event.rawX - downRawX
+                    val dy = event.rawY - downRawY
+                    if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) dragging = true
+                    if (dragging) {
+                        val lp = currentParams()
+                        lp.x = startWindowX + dx.toInt()
+                        lp.y = startWindowY + dy.toInt()
+                        Instances.windowManager.updateViewLayout(binding.root, lp)
+                    }
                     return true
                 }
-                MotionEvent.ACTION_UP -> {
-                    isResize = true
-                    surfaceView.updateLayoutParams {
-                        if (targetWidth > minWidth) width = targetWidth
-                        if (targetHeight > minHeight) height = targetHeight
-                    }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    dragging = false
                     moveToTopIfNeed(event)
                     return true
                 }
@@ -399,24 +459,110 @@ class AppWindow(
         }
     }
 
-    private fun toggleQuickToolbar() {
-        if (binding.quickToolbar.visibility == View.VISIBLE) {
-            hideQuickToolbar()
-        } else {
-            binding.quickToolbar.visibility = View.VISIBLE
-            quickToolbarHideJob?.cancel()
-            quickToolbarHideJob = CoroutineScope(Dispatchers.Main).launch {
-                delay(2000)
-                hideQuickToolbar()
+    private val bottomBarListener = object : View.OnTouchListener {
+        private var downRawY = 0f
+
+        override fun onTouch(v: View, event: MotionEvent): Boolean {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downRawY = event.rawY
+                    return true
+                }
+                MotionEvent.ACTION_UP -> {
+                    val dy = event.rawY - downRawY
+                    when {
+                        dy < -BOTTOM_SWIPE_UP_CLOSE_PX -> close()
+                        dy > BOTTOM_SWIPE_DOWN_FULLSCREEN_PX -> transitionTo(WindowState.FULLSCREEN)
+                        abs(dy) < BOTTOM_TAP_BACK_PX -> sendBackKey()
+                    }
+                    if (!destroyed) moveToTopIfNeed(event)
+                    return true
+                }
+                MotionEvent.ACTION_CANCEL -> return true
             }
+            return true
         }
     }
 
-    private fun hideQuickToolbar() {
-        binding.quickToolbar.visibility = View.GONE
+    private fun cornerResizeListener(isLeft: Boolean) = object : View.OnTouchListener {
+        private var startRawX = 0f
+        private var startRawY = 0f
+        private var startWidth = 0
+        private var startHeight = 0
+        private var startWindowX = 0
+        private var targetWidth = 0
+        private var targetHeight = 0
+        private var targetWindowX = 0
+
+        override fun onTouch(v: View, event: MotionEvent): Boolean {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    val lp = currentParams()
+                    startRawX = event.rawX
+                    startRawY = event.rawY
+                    startWidth = if (lp.width > 0) lp.width else binding.viewTexture.width
+                    startHeight = if (lp.height > 0) lp.height else binding.viewTexture.height
+                    startWindowX = lp.x
+                    targetWidth = startWidth
+                    targetHeight = startHeight
+                    targetWindowX = startWindowX
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (event.rawX - startRawX).toInt()
+                    val dy = (event.rawY - startRawY).toInt()
+                    val rawWidth = if (isLeft) startWidth - dx else startWidth + dx
+                    val rawHeight = startHeight + dy
+                    targetWidth = rawWidth.coerceAtLeast(minWidth)
+                    targetHeight = rawHeight.coerceAtLeast(minHeight)
+                    targetWindowX = if (isLeft) startWindowX + startWidth - targetWidth else startWindowX
+                    val lp = currentParams()
+                    lp.width = targetWidth
+                    lp.height = targetHeight
+                    if (isLeft) lp.x = targetWindowX
+                    Instances.windowManager.updateViewLayout(binding.root, lp)
+                    return true
+                }
+                MotionEvent.ACTION_UP -> {
+                    val lp = currentParams()
+                    lp.width = targetWidth
+                    lp.height = targetHeight
+                    if (isLeft) lp.x = targetWindowX
+                    Instances.windowManager.updateViewLayout(binding.root, lp)
+                    commitVirtualDisplaySize()
+                    moveToTopIfNeed(event)
+                    return true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    val lp = currentParams()
+                    lp.width = startWidth
+                    lp.height = startHeight
+                    lp.x = startWindowX
+                    Instances.windowManager.updateViewLayout(binding.root, lp)
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
+    private fun showQuickMenu() {
+        binding.topQuickMenu.visibility = View.VISIBLE
+        quickMenuHideJob?.cancel()
+        quickMenuHideJob = CoroutineScope(Dispatchers.Main).launch {
+            delay(QUICK_MENU_TIMEOUT)
+            hideQuickMenu()
+        }
+    }
+
+    private fun hideQuickMenu() {
+        quickMenuHideJob?.cancel()
+        quickMenuHideJob = null
+        binding.topQuickMenu.visibility = View.GONE
     }
 
     private fun sendBackKey() {
+        if (displayId < 0) return
         fun inject(action: Int) {
             val event = KeyEvent(
                 SystemClock.uptimeMillis(),
@@ -433,6 +579,7 @@ class AppWindow(
     }
 
     fun forwardMotionEvent(event: MotionEvent) {
+        if (displayId < 0) return
         val newEvent = MotionEvent.obtain(event)
         newEvent.invokeMethod("setDisplayId", args(displayId), argTypes(Integer.TYPE))
         Instances.inputManager.injectInputEvent(newEvent, 0)
@@ -441,8 +588,8 @@ class AppWindow(
 
     inner class SurfaceOnTouchListener : View.OnTouchListener {
         override fun onTouch(v: View, event: MotionEvent): Boolean {
-            if (event.action == MotionEvent.ACTION_DOWN) {
-                Log.d("TOP_DEBUG", "surface.onTouch DOWN x=${event.x} y=${event.y} v=${v.javaClass.simpleName}")
+            if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                hideQuickMenu()
             }
             forwardMotionEvent(event)
             moveToTopIfNeed(event)
@@ -457,49 +604,6 @@ class AppWindow(
         }
     }
 
-    // --- TextureView.SurfaceTextureListener ---
-
-    override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
-        Log.d("SIZE_DEBUG", "onSurfaceTextureAvailable callback=${width}x$height textureView=${binding.viewTexture.width}x${binding.viewTexture.height} card=${binding.cvBackground.width}x${binding.cvBackground.height}")
-        Log.d("SIZE_DEBUG", "density context=${context.resources.displayMetrics.density} system=${Resources.getSystem().displayMetrics.density}")
-        newDpi = calculateDpi(width, height, calculateScreenInches(width, height)) - config.reduceDPI
-        virtualDisplay.resize(width, height, newDpi)
-        surface.setDefaultBufferSize(width, height)
-        Log.d("SIZE_DEBUG", "after resize: vd=${virtualDisplay.display.width}x${virtualDisplay.display.height} dpi=${newDpi}")
-        halfWidth = width % 2
-        halfHeight = height % 2
-        virtualDisplay.surface = Surface(surface)
-    }
-
-    override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
-        if (isResize) {
-            newDpi = calculateDpi(width, height, calculateScreenInches(width, height)) - config.reduceDPI
-            virtualDisplay.resize(width, height, newDpi)
-            surface.setDefaultBufferSize(width, height)
-            halfWidth = width % 2
-            halfHeight = height % 2
-        }
-    }
-
-    override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean = true
-
-    override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
-
-    // --- SurfaceHolder.Callback ---
-
-    override fun surfaceCreated(holder: SurfaceHolder) {
-        virtualDisplay.surface = holder.surface
-    }
-
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        newDpi = calculateDpi(width, height, calculateScreenInches(width, height)) - config.reduceDPI
-        virtualDisplay.resize(width, height, newDpi)
-    }
-
-    override fun surfaceDestroyed(holder: SurfaceHolder) {
-        virtualDisplay.surface = null
-    }
-
     inner class RotationWatcher : IRotationWatcher.Stub() {
         override fun onRotationChanged(rotation: Int) {
             runMain {
@@ -509,20 +613,11 @@ class AppWindow(
     }
 
     fun rotate(rotation: Int) {
-        if (rotation == 1 || rotation == 3) {
-            val t = halfHeight
-            halfHeight = halfWidth
-            halfWidth = t
-            val surfaceWidth = surfaceView.width
-            val surfaceHeight = surfaceView.height
-            surfaceView.updateLayoutParams {
-                width = surfaceHeight
-                height = surfaceWidth
-            }
-        }
+        // Phase 1: rotation must not resize the window/surface outside resize ACTION_UP.
+        Log.d("SIZE_DEBUG", "rotation changed to $rotation (ignored in phase 1)")
     }
 
-    private fun Int.ctxDp() =
+    private fun Int.ctxDp(): Int =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, this.toFloat(), context.resources.displayMetrics).toInt()
 
     private fun calculateScreenInches(width: Int, height: Int): Float {
