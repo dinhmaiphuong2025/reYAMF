@@ -3,10 +3,13 @@ package com.mja.reyamf.manager.services
 import android.os.IBinder
 import android.os.IBinder.DeathRecipient
 import android.util.Log
+import android.view.MotionEvent
+import android.view.Surface
 import com.mja.reyamf.common.model.AppInfo
 import com.mja.reyamf.xposed.IAppIconCallback
 import com.mja.reyamf.xposed.IAppListCallback
 import com.mja.reyamf.xposed.IOpenCountListener
+import com.mja.reyamf.xposed.ISystemUiCallback
 import com.mja.reyamf.xposed.IYAMFManager
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
@@ -104,5 +107,74 @@ object YAMFManagerProxy : IYAMFManager, DeathRecipient {
 
     override fun collapseStatusBarPanel() {
         service?.collapseStatusBarPanel()
+    }
+
+    // --- SystemUI client API: app chính không dùng; forward nếu có service, ngược lại trả giá trị rỗng. ---
+
+    override fun registerSystemUiClient(callback: ISystemUiCallback): Long {
+        return service?.registerSystemUiClient(callback) ?: -1L
+    }
+
+    override fun unregisterSystemUiClient(clientId: Long) {
+        service?.unregisterSystemUiClient(clientId)
+    }
+
+    override fun createVirtualDisplay(
+        clientId: Long,
+        surface: Surface?,
+        width: Int,
+        height: Int,
+        densityDpi: Int,
+        flags: Int
+    ): Int {
+        return service?.createVirtualDisplay(clientId, surface, width, height, densityDpi, flags) ?: -1
+    }
+
+    override fun setVirtualDisplaySurface(clientId: Long, displayId: Int, surface: Surface?) {
+        service?.setVirtualDisplaySurface(clientId, displayId, surface)
+    }
+
+    override fun clearVirtualDisplaySurface(clientId: Long, displayId: Int) {
+        service?.clearVirtualDisplaySurface(clientId, displayId)
+    }
+
+    override fun resizeVirtualDisplay(clientId: Long, displayId: Int, width: Int, height: Int, densityDpi: Int) {
+        service?.resizeVirtualDisplay(clientId, displayId, width, height, densityDpi)
+    }
+
+    override fun releaseWindow(clientId: Long, displayId: Int) {
+        service?.releaseWindow(clientId, displayId)
+    }
+
+    override fun startActivityOnDisplay(clientId: Long, displayId: Int, componentName: String, userId: Int) {
+        service?.startActivityOnDisplay(clientId, displayId, componentName, userId)
+    }
+
+    override fun moveTaskToDisplay(clientId: Long, taskId: Int, displayId: Int) {
+        service?.moveTaskToDisplay(clientId, taskId, displayId)
+    }
+
+    override fun moveTaskToDefaultDisplay(clientId: Long, taskId: Int) {
+        service?.moveTaskToDefaultDisplay(clientId, taskId)
+    }
+
+    override fun closeTask(clientId: Long, taskId: Int) {
+        service?.closeTask(clientId, taskId)
+    }
+
+    override fun launchStartCommand(clientId: Long, displayId: Int, componentName: String, userId: Int, taskId: Int) {
+        service?.launchStartCommand(clientId, displayId, componentName, userId, taskId)
+    }
+
+    override fun setDisplayImePolicy(clientId: Long, displayId: Int, policy: Int) {
+        service?.setDisplayImePolicy(clientId, displayId, policy)
+    }
+
+    override fun injectMotionEvent(clientId: Long, displayId: Int, event: MotionEvent?) {
+        service?.injectMotionEvent(clientId, displayId, event)
+    }
+
+    override fun injectBackKey(clientId: Long, displayId: Int) {
+        service?.injectBackKey(clientId, displayId)
     }
 }

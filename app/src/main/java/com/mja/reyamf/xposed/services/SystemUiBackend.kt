@@ -209,8 +209,11 @@ object SystemUiBackend {
 
     fun closeTask(clientId: Long, taskId: Int) {
         synchronized(lock) { if (clients[clientId] == null) return }
-        runCatching { Instances.activityTaskManager.removeTask(taskId) }
-            .onFailure { Log.w(TAG, "closeTask failed taskId=$taskId", it) }
+        runCatching {
+            Instances.activityTaskManager.invokeMethod(
+                "removeTask", args(taskId), argTypes(Integer.TYPE)
+            )
+        }.onFailure { Log.w(TAG, "closeTask failed taskId=$taskId", it) }
     }
 
     fun launchStartCommand(clientId: Long, displayId: Int, componentName: String, userId: Int, taskId: Int) {
