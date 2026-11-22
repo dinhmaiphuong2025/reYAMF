@@ -4,11 +4,11 @@ data class Config(
     var reduceDPI: Int = 50,
     /*
      * VIRTUAL_DISPLAY_FLAG_SECURE                          1 << 2
+     * VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY                1 << 3
      * VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT            1 << 7
-     * VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS  1 << 9
      * VIRTUAL_DISPLAY_FLAG_TRUSTED                         1 << 10
      */
-    var flags: Int = 1668,
+    var flags: Int = 1164,
     var coloredController: Boolean = false,
     /*
      * 0: move task only
