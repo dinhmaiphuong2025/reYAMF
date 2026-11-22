@@ -13,6 +13,7 @@ import android.view.Display
 import android.view.LayoutInflater
 import android.view.View
 import android.view.WindowManager
+import com.mja.reyamf.BuildConfig
 import com.mja.reyamf.R
 import com.mja.reyamf.databinding.WindowAppBinding
 import com.mja.reyamf.xposed.ISystemUiCallback
@@ -212,7 +213,14 @@ object SystemUiConnector {
                 val display = dm.getDisplay(Display.DEFAULT_DISPLAY)
                     ?: error("no default display")
                 val displayContext = ctx.createDisplayContext(display)
-                val themeContext = CommonContextWrapper(displayContext, R.style.Base_Theme_Reyamf)
+                // KHÔNG dùng displayContext làm base cho theme: Resources của SystemUI
+                // và của module trùng package id 0x7f, nên style id của module bị
+                // resolve sang resource của SystemUI (đã gặp: Failed to resolve attribute).
+                val moduleContext = ctx.createPackageContext(
+                    BuildConfig.APPLICATION_ID,
+                    Context.CONTEXT_IGNORE_SECURITY
+                )
+                val themeContext = CommonContextWrapper(moduleContext, R.style.Base_Theme_Reyamf)
 
                 val binding = WindowAppBinding.inflate(LayoutInflater.from(themeContext))
                 val density = themeContext.resources.displayMetrics.density
