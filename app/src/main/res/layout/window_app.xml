@@ -40,21 +40,12 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content" />
 
-            <!-- Top pill: transparent touch target (drag / tap / double-tap) -->
+            <!-- Top bar: drag handle (full-width title-bar style, distinct from nav pill) -->
             <View
-                android:id="@+id/topPillTouch"
+                android:id="@+id/topBar"
                 android:layout_width="match_parent"
-                android:layout_height="28dp"
+                android:layout_height="40dp"
                 android:layout_gravity="top"
-                android:background="@android:color/transparent" />
-
-            <!-- Top pill: visual handle -->
-            <View
-                android:id="@+id/topPill"
-                android:layout_width="64dp"
-                android:layout_height="5dp"
-                android:layout_gravity="top|center_horizontal"
-                android:layout_marginTop="4dp"
                 android:background="@drawable/bar_corners_bg" />
 
             <!-- Quick toolbar (fullscreen / edge-hide / close), auto-hides -->

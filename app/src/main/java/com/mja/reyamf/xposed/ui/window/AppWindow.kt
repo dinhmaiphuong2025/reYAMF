@@ -170,7 +170,7 @@ class AppWindow(
             Instances.windowManager.addView(layout, params)
         }
 
-        binding.topPillTouch.setOnTouchListener(topPillListener)
+        binding.topBar.setOnTouchListener(topBarListener)
         binding.bottomBarTouch.setOnTouchListener { _, event -> bottomBarDetector.onTouchEvent(event) }
         binding.bottomLeftResize.setOnTouchListener(cornerResizeListener(isLeft = true))
         binding.bottomRightResize.setOnTouchListener(cornerResizeListener(isLeft = false))
@@ -183,7 +183,7 @@ class AppWindow(
         surfaceView.setOnGenericMotionListener(surfaceOnGenericMotionListener)
 
         virtualDisplay = Instances.displayManager.createVirtualDisplay(
-            "yamf${System.currentTimeMillis()}", config.defaultWindowWidth, config.defaultWindowHeight, newDpi - config.reduceDPI, null, flags
+            "yamf${System.currentTimeMillis()}", config.defaultWindowWidth.dpToPx().toInt(), config.defaultWindowHeight.dpToPx().toInt(), newDpi - config.reduceDPI, null, flags
         )
         displayId = virtualDisplay.display.displayId
         (Instances.windowManager as WindowManagerHidden).setDisplayImePolicy(displayId, if (config.showImeInWindow) WindowManagerHidden.DISPLAY_IME_POLICY_LOCAL else WindowManagerHidden.DISPLAY_IME_POLICY_FALLBACK_DISPLAY)
@@ -281,7 +281,7 @@ class AppWindow(
 
     // --- Gestures ---
 
-    private val topPillListener = object : View.OnTouchListener {
+    private val topBarListener = object : View.OnTouchListener {
         private var startRawX = 0f
         private var startRawY = 0f
         private var startX = 0
