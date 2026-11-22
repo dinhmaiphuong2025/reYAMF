@@ -19,6 +19,8 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.InputDevice
 import android.view.KeyEvent
+import android.view.MotionEvent
+import android.view.Surface
 import com.github.kyuubiran.ezxhelper.utils.argTypes
 import com.github.kyuubiran.ezxhelper.utils.args
 import com.github.kyuubiran.ezxhelper.utils.invokeMethod
@@ -32,6 +34,7 @@ import com.mja.reyamf.common.runMain
 import com.mja.reyamf.xposed.IAppIconCallback
 import com.mja.reyamf.xposed.IAppListCallback
 import com.mja.reyamf.xposed.IOpenCountListener
+import com.mja.reyamf.xposed.ISystemUiCallback
 import com.mja.reyamf.xposed.IYAMFManager
 import com.mja.reyamf.xposed.hook.HookLauncher
 import com.mja.reyamf.xposed.ui.window.AppWindow
@@ -308,6 +311,92 @@ object YAMFManager : IYAMFManager.Stub() {
         runMain {
             Instances.iStatusBarService.collapsePanels()
         }
+    }
+
+    // --- SystemUI client (PLAN_SPLIT_SYSTEMUI giai đoạn 1) ---
+    // Mọi method dưới đây chỉ phục vụ process com.android.systemui; requireSystemUiCaller() ném
+    // SecurityException nếu caller khác. Backend giữ display/surface/task/input, không giữ View.
+
+    override fun registerSystemUiClient(callback: ISystemUiCallback): Long {
+        SystemUiBackend.requireSystemUiCaller()
+        return SystemUiBackend.register(callback)
+    }
+
+    override fun unregisterSystemUiClient(clientId: Long) {
+        SystemUiBackend.requireSystemUiCaller()
+        SystemUiBackend.unregister(clientId)
+    }
+
+    override fun createVirtualDisplay(
+        clientId: Long,
+        surface: Surface?,
+        width: Int,
+        height: Int,
+        densityDpi: Int,
+        flags: Int
+    ): Int {
+        SystemUiBackend.requireSystemUiCaller()
+        return SystemUiBackend.createVirtualDisplay(clientId, surface, width, height, densityDpi, flags)
+    }
+
+    override fun setVirtualDisplaySurface(clientId: Long, displayId: Int, surface: Surface?) {
+        SystemUiBackend.requireSystemUiCaller()
+        SystemUiBackend.setVirtualDisplaySurface(clientId, displayId, surface)
+    }
+
+    override fun clearVirtualDisplaySurface(clientId: Long, displayId: Int) {
+        SystemUiBackend.requireSystemUiCaller()
+        SystemUiBackend.clearVirtualDisplaySurface(clientId, displayId)
+    }
+
+    override fun resizeVirtualDisplay(clientId: Long, displayId: Int, width: Int, height: Int, densityDpi: Int) {
+        SystemUiBackend.requireSystemUiCaller()
+        SystemUiBackend.resizeVirtualDisplay(clientId, displayId, width, height, densityDpi)
+    }
+
+    override fun releaseWindow(clientId: Long, displayId: Int) {
+        SystemUiBackend.requireSystemUiCaller()
+        SystemUiBackend.releaseWindow(clientId, displayId)
+    }
+
+    override fun startActivityOnDisplay(clientId: Long, displayId: Int, componentName: String, userId: Int) {
+        SystemUiBackend.requireSystemUiCaller()
+        SystemUiBackend.startActivityOnDisplay(clientId, displayId, componentName, userId)
+    }
+
+    override fun moveTaskToDisplay(clientId: Long, taskId: Int, displayId: Int) {
+        SystemUiBackend.requireSystemUiCaller()
+        SystemUiBackend.moveTaskToDisplay(clientId, taskId, displayId)
+    }
+
+    override fun moveTaskToDefaultDisplay(clientId: Long, taskId: Int) {
+        SystemUiBackend.requireSystemUiCaller()
+        SystemUiBackend.moveTaskToDefaultDisplay(clientId, taskId)
+    }
+
+    override fun closeTask(clientId: Long, taskId: Int) {
+        SystemUiBackend.requireSystemUiCaller()
+        SystemUiBackend.closeTask(clientId, taskId)
+    }
+
+    override fun launchStartCommand(clientId: Long, displayId: Int, componentName: String, userId: Int, taskId: Int) {
+        SystemUiBackend.requireSystemUiCaller()
+        SystemUiBackend.launchStartCommand(clientId, displayId, componentName, userId, taskId)
+    }
+
+    override fun setDisplayImePolicy(clientId: Long, displayId: Int, policy: Int) {
+        SystemUiBackend.requireSystemUiCaller()
+        SystemUiBackend.setDisplayImePolicy(clientId, displayId, policy)
+    }
+
+    override fun injectMotionEvent(clientId: Long, displayId: Int, event: MotionEvent?) {
+        SystemUiBackend.requireSystemUiCaller()
+        SystemUiBackend.injectMotionEvent(clientId, displayId, event)
+    }
+
+    override fun injectBackKey(clientId: Long, displayId: Int) {
+        SystemUiBackend.requireSystemUiCaller()
+        SystemUiBackend.injectBackKey(clientId, displayId)
     }
 
     private val OpenInYAMFBroadcastReceiver: BroadcastReceiver.(Context, Intent) -> Unit =

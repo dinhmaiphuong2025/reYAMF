@@ -32,11 +32,6 @@ class HookSystem : IXposedHookZygoteInit, IXposedHookLoadPackage {
     }
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
-        if (lpparam.packageName == "com.android.systemui") {
-            // TEMPORARY: PLAN_SPLIT_SYSTEMUI bước 0b — spike quyền overlay, xóa sau khi có kết quả.
-            SystemUiOverlaySpike.install(lpparam)
-            return
-        }
         if (lpparam.packageName != "android") return
         log(TAG, "xposed init")
         log(TAG, "buildtype: ${BuildConfig.VERSION_NAME}(${BuildConfig.VERSION_CODE}) ${BuildConfig.BUILD_TYPE}")
