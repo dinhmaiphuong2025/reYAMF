@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.Resources
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.SurfaceTexture
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -192,6 +193,18 @@ class AppWindow(
             Log.d("SIZE_DEBUG", "post: topHandle w=${binding.topHandle.width} h=${binding.topHandle.height} l=${binding.topHandle.left} t=${binding.topHandle.top} r=${binding.topHandle.right} b=${binding.topHandle.bottom}")
             Log.d("SIZE_DEBUG", "post: bottomBar w=${binding.bottomBar.width} h=${binding.bottomBar.height} l=${binding.bottomBar.left} t=${binding.bottomBar.top} r=${binding.bottomBar.right} b=${binding.bottomBar.bottom}")
             Log.d("SIZE_DEBUG", "post: texture w=${binding.viewTexture.width} h=${binding.viewTexture.height}")
+            val lp = currentParams()
+            Log.d(
+                "SIZE_DEBUG",
+                "post: params x=${lp.x} y=${lp.y} w=${lp.width} h=${lp.height} gravity=${lp.gravity} flags=${lp.flags} attached=${binding.root.isAttachedToWindow}"
+            )
+            fun viewState(v: View): String {
+                val r = Rect()
+                val visible = v.getGlobalVisibleRect(r)
+                return "shown=${v.isShown} enabled=${v.isEnabled} clickable=${v.isClickable} visibleRect=$visible:$r"
+            }
+            Log.d("CONTROL_TOUCH", "post: topHandle ${viewState(binding.topHandle)}")
+            Log.d("CONTROL_TOUCH", "post: bottomBar ${viewState(binding.bottomBar)}")
         }
     }
 
@@ -430,7 +443,7 @@ class AppWindow(
         private var dragging = false
 
         override fun onTouch(v: View, event: MotionEvent): Boolean {
-            Log.d("CONTROL_TOUCH", "topHandle action=${event.actionMasked} x=${event.x} y=${event.y}")
+            Log.d("CONTROL_TOUCH", "topHandle action=${event.actionMasked} x=${event.x} y=${event.y} rawX=${event.rawX} rawY=${event.rawY}")
             topHandleDetector.onTouchEvent(event)
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -469,7 +482,7 @@ class AppWindow(
         private var downRawY = 0f
 
         override fun onTouch(v: View, event: MotionEvent): Boolean {
-            Log.d("CONTROL_TOUCH", "bottomBar action=${event.actionMasked} x=${event.x} y=${event.y}")
+            Log.d("CONTROL_TOUCH", "bottomBar action=${event.actionMasked} x=${event.x} y=${event.y} rawX=${event.rawX} rawY=${event.rawY}")
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downRawY = event.rawY
