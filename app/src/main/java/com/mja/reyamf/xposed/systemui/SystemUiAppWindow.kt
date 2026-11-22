@@ -278,6 +278,9 @@ class SystemUiAppWindow(
         if (displayId < 0) {
             // Phải tạo VirtualDisplay TẠI SystemUI: Surface thuộc uid này, tạo hộ từ
             // system_server sẽ bị SecurityException "packageName must match the owner uid".
+            // SECURE (1<<2) yêu cầu CAPTURE_SECURE_VIDEO_OUTPUT — chỉ system_server có.
+            // Tạo trong SystemUI phải bỏ bit này, giữ nguyên các bit còn lại của config.flags.
+            val vdFlags = flags and android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_SECURE.inv()
             val vd = runCatching {
                 val dm = context.getSystemService(DisplayManager::class.java)
                     ?: error("no DisplayManager")
@@ -287,7 +290,7 @@ class SystemUiAppWindow(
                     h,
                     newDpi,
                     Surface(surface),
-                    flags
+                    vdFlags
                 )
             }.getOrElse { t ->
                 Log.e(TAG, "createVirtualDisplay threw", t)
@@ -301,7 +304,7 @@ class SystemUiAppWindow(
             displayId = vd.display.displayId
             vdWidth = w
             vdHeight = h
-            Log.d("SIZE_DEBUG", "created vd=${vd.display.width}x${vd.display.height} dpi=$newDpi flags=$flags displayId=$displayId")
+            Log.d("SIZE_DEBUG", "created vd=${vd.display.width}x${vd.display.height} dpi=$newDpi flags=$vdFlags (cfg=$flags) displayId=$displayId")
             val policy = if (config.showImeInWindow) 1 else 0
             runCatching { client.setDisplayImePolicy(clientId, displayId, policy) }
                 .onFailure { Log.w(TAG, "setDisplayImePolicy failed displayId=$displayId", it) }
