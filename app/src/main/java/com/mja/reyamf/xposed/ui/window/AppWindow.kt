@@ -272,6 +272,7 @@ class AppWindow(
     // --- VirtualDisplay lifecycle ---
 
     override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+        if (destroyed) return
         val w = if (width > 0) width else binding.viewTexture.width
         val h = if (height > 0) height else binding.viewTexture.height
         if (w <= 0 || h <= 0) {
