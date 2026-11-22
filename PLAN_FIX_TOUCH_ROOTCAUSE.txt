@@ -1,0 +1,221 @@
+# PLAN_FIX_TOUCH_ROOTCAUSE — Sửa dứt điểm touch topHandle/bottomBar (+ hardening resize commit)
+
+Trạng thái: **đã tìm ra lỗi gốc bằng bằng chứng runtime**, không phải giả thuyết. Kèm hardening cho race commit kích thước (mục 7 của nhật ký trước) và dọn toàn bộ instrumentation. Tài liệu này bổ sung cho `PLAN_FIX_2.md` (kế hoạch thu log của model senior), không thay thế nội dung file đó.
+
+## 1. Lỗi gốc (đã chứng minh)
+
+`AppWindow` khởi tạo listener trong `init { … doInit() }` (dòng 118–126), nhưng hai property listener được khởi tạo **sau** khối `init`:
+
+- `topHandleListener` — dòng 460
+- `bottomBarListener` — dòng 503
+
+Kotlin/JVM chạy property initializer theo thứ tự khai báo. Khi `doInit()` đọc hai property này, backing field chưa được gán (giá trị JVM mặc định là `null`); `View.setOnTouchListener()` là API Java nhận listener nullable nên nhận `null`, không gắn callback. Bằng chứng runtime xác nhận: dispatch vào view và trả `handled=true` do `clickable=true`, nhưng `CONTROL_TOUCH` không xuất hiện.
+
+**Không đổi hai property sang `by lazy` trong khi giữ chúng sau `init`.** Delegate field của `lazy` cũng chưa được khởi tạo lúc `doInit()` truy cập property; `getValue()` khi đó gây NPE. Fix dùng factory functions, được gọi trực tiếp từ `doInit()`. Factory chỉ tạo object listener, không chạy `onTouch()`; `topHandleDetector` chỉ được truy cập khi người dùng chạm, sau khi constructor đã hoàn tất.
+
+Đối chứng khớp 100% với dữ liệu thu được:
+
+| View | Cách tạo listener | Listener có hiệu lực? |
+|---|---|---|
+| `viewTexture` | property khai báo dòng 81–82 (trước `init`) | Có — `SURFACE_TOUCH node=TouchTraceTextureView action=0` xuất hiện |
+| `resizeBottomLeft/Right` | `cornerResizeListener(isLeft = …)` là **hàm** (dòng 529), gọi trong `doInit()` | Có — kéo góc resize đổi kích thước cửa sổ |
+| `topHandle` | property khai báo dòng 460 (sau `init`) | **Không** — chỉ có `TOUCH_TRACE … handled=true`, không có `CONTROL_TOUCH` |
+| `bottomBar` | property khai báo dòng 503 (sau `init`) | **Không** — cùng hiện tượng |
+
+Bằng chứng trace cho một cú chạm tâm 3 chấm (720,1099) trên APK 1748b92:
+
+```
+IN  node=TouchTraceCardView(id=root) action=0 local=490.0,42.0 ...
+IN  node=TouchTraceFrameLayout(id=topHandle) action=0 local=112.0,42.0 bounds=378,0,602,84 clickable=true
+IN  node=TouchTraceImageView(id=NO_ID) action=0 ... handled=false
+OUT node=TouchTraceFrameLayout(id=topHandle) action=0 ... handled=true
+OUT node=TouchTraceFrameLayout(id=contentFrame) action=0 ... handled=true
+```
+
+Dispatch tới đúng `topHandle`, trả handled=true, nhưng **không một dòng `CONTROL_TOUCH`** → OnTouchListener chưa từng được gọi → listener null. Không phải z-order, không phải TextureView, không phải window flags.
+
+## 2. Fix A — dùng factory functions, không dùng `by lazy`
+
+**Không đổi listener thành property `by lazy`.** Với `init` đứng trước property, Kotlin truy cập backing field của delegate khi `doInit()` chạy trước khi delegate được gán; kết quả là NPE. Chọn factory functions vì ít thay đổi và không phụ thuộc thứ tự khởi tạo.
+
+Trong `doInit()` (dòng hiện tại 165–168), thay đúng hai dòng gắn listener:
+
+```kotlin
+        binding.topHandle.setOnTouchListener(createTopHandleListener())
+        binding.bottomBar.setOnTouchListener(createBottomBarListener())
+```
+
+Hai dòng trên nằm sau `addView()` và trước các listener resize; giữ nguyên thứ tự đó. Xóa hẳn hai property `topHandleListener` và `bottomBarListener` hiện tại (hiện khoảng dòng 460–527); thêm hai hàm sau vào đúng vị trí cũ của chúng, cùng bên trong `AppWindow`:
+
+```kotlin
+    private fun createTopHandleListener(): View.OnTouchListener = object : View.OnTouchListener {
+        private var downRawX = 0f
+        private var downRawY = 0f
+        private var startWindowX = 0
+        private var startWindowY = 0
+        private var dragging = false
+
+        override fun onTouch(v: View, event: MotionEvent): Boolean {
+            Log.d("CONTROL_TOUCH", "topHandle action=${event.actionMasked} x=${event.x} y=${event.y} rawX=${event.rawX} rawY=${event.rawY}")
+            topHandleDetector.onTouchEvent(event)
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    val lp = currentParams()
+                    downRawX = event.rawX
+                    downRawY = event.rawY
+                    startWindowX = lp.x
+                    startWindowY = lp.y
+                    dragging = false
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - downRawX
+                    val dy = event.rawY - downRawY
+                    if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) dragging = true
+                    if (dragging) {
+                        val lp = currentParams()
+                        lp.x = startWindowX + dx.toInt()
+                        lp.y = startWindowY + dy.toInt()
+                        Instances.windowManager.updateViewLayout(binding.root, lp)
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    dragging = false
+                    moveToTopIfNeed(event)
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
+    private fun createBottomBarListener(): View.OnTouchListener = object : View.OnTouchListener {
+        private var downRawY = 0f
+
+        override fun onTouch(v: View, event: MotionEvent): Boolean {
+            Log.d("CONTROL_TOUCH", "bottomBar action=${event.actionMasked} x=${event.x} y=${event.y} rawX=${event.rawX} rawY=${event.rawY}")
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downRawY = event.rawY
+                    return true
+                }
+                MotionEvent.ACTION_UP -> {
+                    val dy = event.rawY - downRawY
+                    when {
+                        dy < -BOTTOM_SWIPE_UP_CLOSE_PX -> close()
+                        dy > BOTTOM_SWIPE_DOWN_FULLSCREEN_PX -> transitionTo(WindowState.FULLSCREEN)
+                        abs(dy) < BOTTOM_TAP_BACK_PX -> sendBackKey()
+                    }
+                    if (!destroyed) moveToTopIfNeed(event)
+                    return true
+                }
+                MotionEvent.ACTION_CANCEL -> return true
+            }
+            return true
+        }
+    }
+```
+
+Không thêm field listener, không dùng `by lazy`, không di chuyển `init`, không đổi thân xử lý/ngưỡng. `broadcastReceiver`, `taskStackListener`, `rotationWatcher`, `surfaceOnTouchListener`, `surfaceOnGenericMotionListener`, `state`, `params`, `touchSlop`, minWidth/minHeight đều được khởi tạo trước `init`; `binding` được gán trước `doInit()`. `topHandleDetector` khai báo sau `init`, nhưng factory không đọc nó; chỉ `onTouch()` đọc detector khi gesture xảy ra sau khi constructor đã hoàn tất. `cornerResizeListener()` là function được gọi trong `doInit()`, không phải property chưa khởi tạo.
+
+
+## 3. Fix B — serial hóa commit resize để không áp kích thước trung gian
+
+Anomaly `applied vd=830x1399` không tái hiện trên APK 1748b92: một lần resize cho commit khớp `req=882x1195`, TextureView `882x1195`, params `882x1251`, VD cuối `882x1195`. Vì vậy đây là **hardening cho race có thể xảy ra**, không phải nguyên nhân đã xác nhận của log cũ.
+
+Code hiện tại đăng ký đồng thời `OnLayoutChangeListener` và callback `postDelayed(120ms)` cho mỗi ACTION_UP, nhưng không hủy lần commit cũ khi bắt đầu lần resize mới. Sửa theo phương án ít race nhất: mỗi lần chỉ có **một runnable commit**, runnable lấy size TextureView sau khi layout ổn định; ACTION_DOWN mới hủy pending runnable, ACTION_CANCEL khôi phục params rồi cũng schedule commit size đã khôi phục.
+
+### Thêm field và helper
+
+Thêm cạnh state fields trong `AppWindow`:
+
+```kotlin
+private var resizeCommitRunnable: Runnable? = null
+private var resizeGestureActive = false
+```
+
+Thêm helper:
+
+```kotlin
+private fun cancelPendingResizeCommit() {
+    resizeCommitRunnable?.let { binding.viewTexture.removeCallbacks(it) }
+    resizeCommitRunnable = null
+}
+```
+
+### Thay toàn bộ commitVirtualDisplaySize()
+
+Xóa `OnLayoutChangeListener` hiện tại và thay nguyên hàm `commitVirtualDisplaySize()` (hiện khoảng dòng 402–441) bằng:
+
+```kotlin
+private fun commitVirtualDisplaySize() {
+    cancelPendingResizeCommit()
+    val texture = binding.viewTexture
+    val commit = object : Runnable {
+        override fun run() {
+            if (resizeCommitRunnable !== this) return
+            resizeCommitRunnable = null
+            if (destroyed || resizeGestureActive || texture.width <= 0 || texture.height <= 0) return
+            applyVirtualDisplaySize(texture.width, texture.height)
+        }
+    }
+    resizeCommitRunnable = commit
+    texture.postDelayed(commit, RESIZE_COMMIT_FALLBACK_MS)
+}
+```
+
+Giữ `RESIZE_COMMIT_FALLBACK_MS = 120L`. So sánh identity `resizeCommitRunnable !== this` ngăn runnable cũ đã lọt khỏi hàng đợi áp size sau khi có commit mới. Kích thước được lấy từ TextureView thực tế lúc runnable chạy, không dùng kích thước capture cũ.
+
+### Sửa ba nhánh listener resize
+
+Trong `cornerResizeListener(isLeft)`:
+
+- `ACTION_DOWN`: trước `return true`, đặt `resizeGestureActive = true` rồi gọi `cancelPendingResizeCommit()`. Điều này ngăn commit cuối của cử chỉ trước chạy trong khi cử chỉ mới đang thay đổi params.
+- `ACTION_UP`: giữ nguyên update `params` + `updateViewLayout`; đặt `resizeGestureActive = false`; gọi `commitVirtualDisplaySize()` đúng một lần; giữ `moveToTopIfNeed(event)`.
+- `ACTION_CANCEL`: khôi phục params x/y/width/height đúng như hiện tại; gọi `updateViewLayout`; đặt `resizeGestureActive = false`; gọi `commitVirtualDisplaySize()` để VD khớp kích thước đã khôi phục sau layout.
+
+Không gọi `virtualDisplay.resize()` hoặc `setDefaultBufferSize()` trong ACTION_MOVE. Không thêm listener layout nào khác. Trong `onDestroy()`, gọi `cancelPendingResizeCommit()` sau khi đặt `destroyed=true`, trước release/remove view.
+
+Không sửa `applyVirtualDisplaySize()`; hàm đó vẫn là nơi duy nhất áp `setDefaultBufferSize` + `virtualDisplay.resize` cho resize gesture.
+
+## 4. Dọn instrumentation (bắt buộc, cùng lần sửa)
+
+1. `window_app.xml`: trả toàn bộ class tag về chuẩn — root `com.google.android.material.card.MaterialCardView`, `windowColumn`/`topQuickMenu` = `LinearLayout`, `contentFrame`/`topHandle`/`bottomBar` = `FrameLayout`, `viewTexture` = `TextureView`, ImageView con = `ImageView`, pill + 2 resize handle = `View`. Giữ nguyên mọi ID, thuộc tính, kích thước, thứ tự child.
+2. `AppWindow.kt`: xóa toàn bộ phần cuối file từ comment `// --- DIAGNOSTIC ONLY (PLAN_DIAG_2)` tới hết file, gồm `touchTraceName`, `traceDispatch`, và 6 class `TouchTrace*`.
+3. Trong `AppWindow.kt`, xóa import `android.util.AttributeSet` sau khi đã xóa `TouchTrace*` classes. Xóa log `SURFACE_TOUCH` khỏi `SurfaceOnTouchListener.onTouch()` và mọi `Log.d("SIZE_COMMIT_TRACE", …)` ở `applyVirtualDisplaySize`, `commitVirtualDisplaySize`, `onSurfaceTextureAvailable`. Giữ `CONTROL_TOUCH` ở hai factory listeners và `SIZE_DEBUG` cho nghiệm thu; xóa `TOP_DEBUG` nếu còn.
+
+## 5. Cấm
+
+1. CẤM "sửa" bằng `bringToFront()` lần nữa — z-order không phải nguyên nhân; đã có đủ 5 lệnh trong `doInit()`.
+2. CẤM đổi `clickable`, thêm `requestDisallowInterceptTouchEvent`, hay đổi cấu trúc `TextureView`/`bottomBar` — dispatch đã đúng.
+3. CẤM chuyển sang `setOnClickListener` hoặc bỏ `GestureDetector` (phải giữ double-tap); cấm đổi ngưỡng `-60px / 80px / 15px / 2500ms`.
+4. CẤM gọi `virtualDisplay.resize()`/`setDefaultBufferSize()` trong ACTION_MOVE.
+5. CẤM đổi `Config.flags` khỏi 1164 hoặc đổi layout ngoài việc hoàn nguyên class tag ở mục 4.
+
+## 6. Build & nghiệm thu
+
+```bash
+./gradlew assembleDebug
+```
+
+Trên máy (adb):
+
+```bash
+adb -s emulator-5554 uninstall com.mja.reyamf      # chữ ký CI khác bản cũ
+adb -s emulator-5554 install app/build/outputs/apk/debug/app-debug.apk
+# reboot đầy đủ để system_server nạp dex mới
+adb logcat -c && adb logcat -v time -s CONTROL_TOUCH:V SIZE_DEBUG:V
+```
+
+Checklist:
+- [ ] Chạm tâm 3 chấm → log `CONTROL_TOUCH topHandle action=0` xuất hiện, menu Fullscreen/Mini/Close hiện, tự ẩn sau 2.5s.
+- [ ] Tap 1 lần trên 3 chấm không kéo cửa sổ; kéo 3 chấm di chuyển cửa sổ theo rawX/rawY.
+- [ ] Double-tap 3 chấm → app ra display 0, cửa sổ đóng, không còn log sau đó.
+- [ ] Chạm thanh pill đáy → `CONTROL_TOUCH bottomBar action=0`; tap < 15px gửi Back vào displayId (app bên trong lùi 1 bước).
+- [ ] Vuốt lên > 60px đóng cửa sổ; vuốt xuống > 80px fullscreen; khoảng cách khác không gây action.
+- [ ] Kéo 2 góc resize vẫn chạy; `onSurfaceTextureSizeChanged ... (no vd resize)` chỉ xuất hiện khi đang kéo.
+- [ ] `grep -rn "TouchTrace\|SURFACE_TOUCH\|SIZE_COMMIT_TRACE\|TOUCH_TRACE" app/src` trả về rỗng.
+- [ ] `grep -n "topHandleListener\|bottomBarListener" AppWindow.kt` không còn property listener cũ; chỉ còn `createTopHandleListener()`/`createBottomBarListener()` và hai lời gọi factory trong `doInit()`.
+- [ ] `AppWindow.kt` không còn import `AttributeSet`, không còn `TOP_DEBUG`; `CONTROL_TOUCH` còn đúng hai listener.
+- [ ] `window_app.xml` không còn class `com.mja.reyamf.xposed.ui.window.*`; vẫn đủ `topHandle` 64×24dp, `bottomBar` 16dp ngoài `contentFrame`, TextureView là child đầu tiên.
