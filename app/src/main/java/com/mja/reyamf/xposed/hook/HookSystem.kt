@@ -8,6 +8,7 @@ import com.github.kyuubiran.ezxhelper.utils.findMethod
 import com.github.kyuubiran.ezxhelper.utils.hookAfter
 import com.github.kyuubiran.ezxhelper.utils.hookBefore
 import com.mja.reyamf.BuildConfig
+import com.mja.reyamf.xposed.services.SystemUiConnector
 import com.mja.reyamf.xposed.services.UserService
 import com.mja.reyamf.xposed.services.YAMFManager
 import com.mja.reyamf.xposed.utils.log
@@ -32,6 +33,11 @@ class HookSystem : IXposedHookZygoteInit, IXposedHookLoadPackage {
     }
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
+        if (lpparam.packageName == "com.android.systemui") {
+            EzXHelperInit.initHandleLoadPackage(lpparam)
+            SystemUiConnector.install(lpparam)
+            return
+        }
         if (lpparam.packageName != "android") return
         log(TAG, "xposed init")
         log(TAG, "buildtype: ${BuildConfig.VERSION_NAME}(${BuildConfig.VERSION_CODE}) ${BuildConfig.BUILD_TYPE}")
