@@ -7,12 +7,14 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.res.Resources
 import android.graphics.PixelFormat
 import android.graphics.SurfaceTexture
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.os.SystemClock
 import android.util.Log
+import android.util.TypedValue
 import android.view.Display
 import android.view.GestureDetector
 import android.view.Gravity
@@ -174,6 +176,7 @@ class AppWindow(
         binding.bottomBarTouch.setOnTouchListener { _, event -> bottomBarDetector.onTouchEvent(event) }
         binding.bottomLeftResize.setOnTouchListener(cornerResizeListener(isLeft = true))
         binding.bottomRightResize.setOnTouchListener(cornerResizeListener(isLeft = false))
+        binding.topBar.bringToFront()
 
         binding.btnFullscreen.setOnClickListener { transitionTo(WindowState.FULLSCREEN) }
         binding.btnEdgeHide.setOnClickListener { transitionTo(WindowState.EDGE_HIDE) }
@@ -183,7 +186,7 @@ class AppWindow(
         surfaceView.setOnGenericMotionListener(surfaceOnGenericMotionListener)
 
         virtualDisplay = Instances.displayManager.createVirtualDisplay(
-            "yamf${System.currentTimeMillis()}", config.defaultWindowWidth.dpToPx().toInt(), config.defaultWindowHeight.dpToPx().toInt(), newDpi - config.reduceDPI, null, flags
+            "yamf${System.currentTimeMillis()}", config.defaultWindowWidth.ctxDp(), config.defaultWindowHeight.ctxDp(), newDpi - config.reduceDPI, null, flags
         )
         displayId = virtualDisplay.display.displayId
         (Instances.windowManager as WindowManagerHidden).setDisplayImePolicy(displayId, if (config.showImeInWindow) WindowManagerHidden.DISPLAY_IME_POLICY_LOCAL else WindowManagerHidden.DISPLAY_IME_POLICY_FALLBACK_DISPLAY)
@@ -204,8 +207,8 @@ class AppWindow(
         watchRotation()
         context.registerReceiver(broadcastReceiver, IntentFilter(ACTION_RESET_ALL_WINDOW), Context.RECEIVER_EXPORTED)
 
-        val width = config.defaultWindowWidth.dpToPx().toInt()
-        val height = config.defaultWindowHeight.dpToPx().toInt()
+        val width = config.defaultWindowWidth.ctxDp()
+        val height = config.defaultWindowHeight.ctxDp()
         surfaceView.updateLayoutParams {
             this.width = width
             this.height = height
@@ -220,6 +223,9 @@ class AppWindow(
             binding.cvBackground.visibility = View.VISIBLE
             animateAlpha(binding.root, 0f, 1f)
             isResize = true
+            Log.d("TOP_DEBUG", "post: topBar w=${binding.topBar.width} h=${binding.topBar.height} l=${binding.topBar.left} t=${binding.topBar.top} r=${binding.topBar.right} b=${binding.topBar.bottom}")
+            Log.d("TOP_DEBUG", "post: bottomBar w=${binding.bottomBarTouch.width} h=${binding.bottomBarTouch.height} t=${binding.bottomBarTouch.top} b=${binding.bottomBarTouch.bottom}")
+            Log.d("TOP_DEBUG", "post: surface w=${surfaceView.width} h=${surfaceView.height} card w=${binding.cvBackground.width} h=${binding.cvBackground.height}")
         }
     }
 
@@ -290,6 +296,9 @@ class AppWindow(
         private var lastTapTime = 0L
 
         override fun onTouch(v: View, event: MotionEvent): Boolean {
+            if (event.action == MotionEvent.ACTION_DOWN) {
+                Log.d("TOP_DEBUG", "topBar.onTouch DOWN x=${event.x} y=${event.y} rawX=${event.rawX} rawY=${event.rawY} w=${v.width} h=${v.height} l=${v.left} t=${v.top} r=${v.right} b=${v.bottom}")
+            }
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     val lp = binding.root.layoutParams as WindowManager.LayoutParams
@@ -432,6 +441,9 @@ class AppWindow(
 
     inner class SurfaceOnTouchListener : View.OnTouchListener {
         override fun onTouch(v: View, event: MotionEvent): Boolean {
+            if (event.action == MotionEvent.ACTION_DOWN) {
+                Log.d("TOP_DEBUG", "surface.onTouch DOWN x=${event.x} y=${event.y} v=${v.javaClass.simpleName}")
+            }
             forwardMotionEvent(event)
             moveToTopIfNeed(event)
             return true
@@ -448,9 +460,12 @@ class AppWindow(
     // --- TextureView.SurfaceTextureListener ---
 
     override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+        Log.d("SIZE_DEBUG", "onSurfaceTextureAvailable callback=${width}x$height textureView=${binding.viewTexture.width}x${binding.viewTexture.height} card=${binding.cvBackground.width}x${binding.cvBackground.height}")
+        Log.d("SIZE_DEBUG", "density context=${context.resources.displayMetrics.density} system=${Resources.getSystem().displayMetrics.density}")
         newDpi = calculateDpi(width, height, calculateScreenInches(width, height)) - config.reduceDPI
         virtualDisplay.resize(width, height, newDpi)
         surface.setDefaultBufferSize(width, height)
+        Log.d("SIZE_DEBUG", "after resize: vd=${virtualDisplay.display.width}x${virtualDisplay.display.height} dpi=${newDpi}")
         halfWidth = width % 2
         halfHeight = height % 2
         virtualDisplay.surface = Surface(surface)
@@ -506,6 +521,9 @@ class AppWindow(
             }
         }
     }
+
+    private fun Int.ctxDp() =
+        TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, this.toFloat(), context.resources.displayMetrics).toInt()
 
     private fun calculateScreenInches(width: Int, height: Int): Float {
         val x = (width / context.resources.displayMetrics.xdpi).pow(2)
