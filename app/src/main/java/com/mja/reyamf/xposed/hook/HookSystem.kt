@@ -34,7 +34,6 @@ class HookSystem : IXposedHookZygoteInit, IXposedHookLoadPackage {
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         if (lpparam.packageName == "com.android.systemui") {
-            EzXHelperInit.initHandleLoadPackage(lpparam)
             SystemUiConnector.install(lpparam)
             return
         }

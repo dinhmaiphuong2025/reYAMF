@@ -19,6 +19,7 @@ import com.mja.reyamf.xposed.ISystemUiCallback
 import com.mja.reyamf.xposed.IYAMFManager
 import com.qauxv.ui.CommonContextWrapper
 import de.robv.android.xposed.XC_MethodHook
+import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 import kotlin.math.roundToInt
@@ -33,6 +34,7 @@ object SystemUiConnector {
     private const val TAG = "reYAMF_SystemUiConn"
 
     private const val AUTHORITY = "com.mja.reyamf.ServiceProvider"
+    private const val SYSTEM_UI_PACKAGE = "com.android.systemui"
     private const val METHOD_GET_BINDER = "GET_SYSTEM_SERVER_BINDER"
     private const val KEY_STATUS = "status"
     private const val KEY_BINDER = "binder"
@@ -57,22 +59,21 @@ object SystemUiConnector {
 
     fun install(lpparam: XC_LoadPackage.LoadPackageParam) {
         runCatching {
-            XposedHelpers.findAndHookMethod(
-                "com.android.systemui.SystemUIApplication",
-                lpparam.classLoader,
+            // Không hook theo tên class SystemUIApplication: trên ROM này
+            // XposedHelpers.findClass không resolve được tên đó (ClassNotFound).
+            // Application.onCreate là entry point ổn định cho mọi process.
+            XposedBridge.hookAllMethods(
+                android.app.Application::class.java,
                 "onCreate",
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
-                        val app = param.thisObject as? Context
-                        if (app == null) {
-                            Log.e(TAG, "SystemUIApplication is not a Context")
-                            return
-                        }
+                        val app = param.thisObject as? Context ?: return
+                        if (app.packageName != SYSTEM_UI_PACKAGE) return
                         start(app)
                     }
                 }
             )
-            Log.d(TAG, "hook installed")
+            Log.d(TAG, "hook installed on Application.onCreate")
         }.onFailure { Log.e(TAG, "hook install failed", it) }
     }
 
