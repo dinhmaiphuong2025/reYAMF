@@ -1,6 +1,7 @@
 package com.mja.reyamf.xposed.services
 
 import android.content.Context
+import android.content.Intent
 import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.os.Bundle
@@ -10,26 +11,19 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import android.view.Display
-import android.view.LayoutInflater
-import android.view.View
-import android.view.WindowManager
-import com.mja.reyamf.BuildConfig
-import com.mja.reyamf.R
-import com.mja.reyamf.databinding.WindowAppBinding
 import com.mja.reyamf.xposed.ISystemUiCallback
 import com.mja.reyamf.xposed.IYAMFManager
-import com.qauxv.ui.CommonContextWrapper
+import com.mja.reyamf.xposed.systemui.SystemUiAppWindow
 import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
-import kotlin.math.roundToInt
+import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Connector chạy trong process com.android.systemui (PLAN_STAGE2_CONNECTOR).
+ * Connector chạy trong process com.android.systemui.
  *
- * Không giữ View/thao tác UI trên Binder thread; không dùng Instances/YAMFManager/hidden API.
- * Chỉ: handshake provider -> registerSystemUiClient -> smoke inflate (Stage 2b).
+ * Stage 2: handshake provider -> registerSystemUiClient.
+ * Stage 3a: tạo cửa sổ thật (SystemUiAppWindow) trong SystemUI qua client AIDL.
  */
 object SystemUiConnector {
     private const val TAG = "reYAMF_SystemUiConn"
@@ -45,8 +39,7 @@ object SystemUiConnector {
     private const val BACKOFF_MIN_MS = 250L
     private const val BACKOFF_MAX_MS = 2000L
 
-    private const val SMOKE_WIDTH_DP = 280
-    private const val SMOKE_HEIGHT_DP = 380
+    private const val DEBUG_CREATE_WINDOW = "com.mja.reyamf.DEBUG_CREATE_WINDOW"
 
     @Volatile private var appContext: Context? = null
     @Volatile private var generation = 0
@@ -57,6 +50,10 @@ object SystemUiConnector {
     private var manager: IYAMFManager? = null
     private var binderRef: IBinder? = null
     private var deathRecipient: IBinder.DeathRecipient? = null
+    private var debugTriggerInstalled = false
+
+    private val windows = ConcurrentHashMap<Int, SystemUiAppWindow>()
+    private val taskByDisplay = ConcurrentHashMap<Int, Int>()
 
     fun install(lpparam: XC_LoadPackage.LoadPackageParam) {
         runCatching {
@@ -166,7 +163,7 @@ object SystemUiConnector {
         deathRecipient = death
         clientId = id
         Log.d(TAG, "client registered clientId=$id")
-        smokeInflate(gen)
+        installDebugTrigger(appContext)
     }
 
     private fun onBinderDied(gen: Int) {
@@ -186,15 +183,21 @@ object SystemUiConnector {
     private val callback = object : ISystemUiCallback.Stub() {
         override fun onCreateWindow(requestId: Long, componentName: String?, userId: Int, taskId: Int) {
             Log.d(TAG, "onCreateWindow req=$requestId comp=$componentName user=$userId task=$taskId")
-            // Stage 3: tạo AppWindow trong SystemUI. Stage 2 chỉ log.
+            Handler(Looper.getMainLooper()).post {
+                createWindowOnMain(componentName, userId, taskId)
+            }
         }
 
         override fun onTaskStateChanged(displayId: Int, taskId: Int, visible: Boolean) {
+            if (visible && taskId > 0) taskByDisplay[displayId] = taskId
             Log.d(TAG, "onTaskStateChanged display=$displayId task=$taskId visible=$visible")
         }
 
         override fun onTaskClosed(displayId: Int, taskId: Int) {
             Log.d(TAG, "onTaskClosed display=$displayId task=$taskId")
+            Handler(Looper.getMainLooper()).post {
+                windows.remove(displayId)?.onDestroy()
+            }
         }
 
         override fun onDisplayError(requestId: Long, displayId: Int, errorCode: Int, message: String?) {
@@ -202,48 +205,60 @@ object SystemUiConnector {
         }
     }
 
-    /** Stage 2b: chỉ inflate + measure, KHÔNG addView (gate 0b đã chứng minh overlay). */
-    private fun smokeInflate(gen: Int) {
+    /** Stage 3a: tạo cửa sổ thật trong SystemUI. Chỉ gọi trên main thread. */
+    private fun createWindowOnMain(componentName: String?, userId: Int, taskId: Int) {
         val ctx = appContext ?: return
-        Handler(Looper.getMainLooper()).post {
-            if (gen != generation || clientId <= 0) return@post
-            runCatching {
-                val dm = ctx.getSystemService(DisplayManager::class.java)
-                    ?: error("no DisplayManager")
-                val display = dm.getDisplay(Display.DEFAULT_DISPLAY)
-                    ?: error("no default display")
-                val displayContext = ctx.createDisplayContext(display)
-                // KHÔNG dùng displayContext làm base cho theme: Resources của SystemUI
-                // và của module trùng package id 0x7f, nên style id của module bị
-                // resolve sang resource của SystemUI (đã gặp: Failed to resolve attribute).
-                val moduleContext = ctx.createPackageContext(
-                    BuildConfig.APPLICATION_ID,
-                    Context.CONTEXT_IGNORE_SECURITY
-                )
-                val themeContext = CommonContextWrapper(moduleContext, R.style.Base_Theme_Reyamf)
-
-                val binding = WindowAppBinding.inflate(LayoutInflater.from(themeContext))
-                val density = themeContext.resources.displayMetrics.density
-                val w = (SMOKE_WIDTH_DP * density).roundToInt().coerceAtLeast(1)
-                val h = (SMOKE_HEIGHT_DP * density).roundToInt().coerceAtLeast(1)
-
-                val root = binding.root
-                root.measure(
-                    View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
-                    View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY)
-                )
-                root.layout(0, 0, w, h)
-
-                val wm = displayContext.getSystemService(WindowManager::class.java)
-                Log.d(
-                    TAG,
-                    "inflate smoke PASS root=${root.javaClass.simpleName} ${root.width}x${root.height} " +
-                        "contentFrame=${binding.contentFrame.width}x${binding.contentFrame.height} " +
-                        "texture=${binding.viewTexture.width}x${binding.viewTexture.height} " +
-                        "bottomBar=${binding.bottomBar.width}x${binding.bottomBar.height} " +
-                        "wm=${wm?.javaClass?.name} density=$density"
-                )
-            }.onFailure { Log.e(TAG, "inflate smoke FAIL", it) }
+        val iface = manager ?: return
+        val id = clientId
+        if (id <= 0) return
+        if (windows.isNotEmpty()) {
+            Log.d(TAG, "createWindow ignored: ${windows.size} window(s) already open")
+            return
         }
+        runCatching {
+            val dm = ctx.getSystemService(DisplayManager::class.java) ?: error("no DisplayManager")
+            val display = dm.getDisplay(Display.DEFAULT_DISPLAY) ?: error("no default display")
+            val displayContext = ctx.createDisplayContext(display)
+            lateinit var window: SystemUiAppWindow
+            window = SystemUiAppWindow(
+                context = displayContext,
+                client = iface,
+                clientId = id,
+                flags = 1164,
+                taskIdProvider = { taskByDisplay[window.displayId] ?: taskId },
+                onClosed = { d -> windows.remove(d) }
+            )
+            // Surface của TextureView đến bất đồng bộ: displayId chỉ hợp lệ trong callback này.
+            window.setup { d ->
+                windows[d] = window
+                Log.d(TAG, "window ready displayId=$d taskId=$taskId")
+                if (taskId > 0) {
+                    runCatching {
+                        iface.launchStartCommand(id, d, componentName ?: "", userId, taskId)
+                    }.onFailure { Log.e(TAG, "launchStartCommand failed displayId=$d", it) }
+                }
+            }
+        }.onFailure { Log.e(TAG, "createWindow failed", it) }
+    }
+
+    /** Stage 3a: trigger test qua broadcast, sẽ xoá ở stage 3b. */
+    private fun installDebugTrigger(ctx: Context?) {
+        if (ctx == null || debugTriggerInstalled) return
+        debugTriggerInstalled = true
+        runCatching {
+            ctx.registerReceiver(
+                object : android.content.BroadcastReceiver() {
+                    override fun onReceive(c: Context, i: Intent) {
+                        val taskId = i.getIntExtra("taskId", 0)
+                        val comp = i.getStringExtra("component")
+                        Log.d(TAG, "DEBUG_CREATE_WINDOW taskId=$taskId comp=$comp")
+                        Handler(Looper.getMainLooper()).post { createWindowOnMain(comp, 0, taskId) }
+                    }
+                },
+                android.content.IntentFilter(DEBUG_CREATE_WINDOW),
+                Context.RECEIVER_EXPORTED
+            )
+            Log.d(TAG, "debug trigger installed")
+        }.onFailure { Log.w(TAG, "debug trigger install failed", it) }
     }
 }
