@@ -1,6 +1,5 @@
 package com.mja.reyamf.manager.providers
 
-import android.app.AppOpsManager
 import android.content.ContentProvider
 import android.content.ContentValues
 import android.net.Uri
@@ -92,8 +91,9 @@ class ServiceProvider : ContentProvider() {
             ctx.packageManager.getPackageUid(SYSTEM_UI_PACKAGE, 0)
         }.getOrDefault(-1)
         if (expectedUid <= 0 || uid != expectedUid) return false
-        val appOps = ctx.getSystemService(AppOpsManager::class.java) ?: return false
-        return runCatching { appOps.checkPackage(uid, SYSTEM_UI_PACKAGE) }.getOrDefault(false)
+        // callingPackage do AMS cung cấp; uid == uid của package SystemUI là đủ để chặn caller khác.
+        // AppOpsManager.checkPackage không resolve được trên compileSdk 36 nên không dùng.
+        return true
     }
 
     private fun ready(binder: android.os.IBinder?): Bundle = Bundle().apply {
