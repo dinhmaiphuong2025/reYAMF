@@ -35,6 +35,11 @@ android {
         )
     }
     buildTypes {
+        debug {
+            // Keystore cố định trong repo để mọi lần build CI có cùng chữ ký,
+            // nhờ đó `adb install -r` không cần uninstall (không mất dữ liệu app).
+            signingConfig = signingConfigs.getByName("reyamfDebug")
+        }
         release {
             isMinifyEnabled = false
             isShrinkResources = false
@@ -42,6 +47,15 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+    }
+    signingConfigs {
+        create("reyamfDebug") {
+            storeFile = rootProject.file("keystore/reyamf-debug.p12")
+            storePassword = "reyamfdebug"
+            keyAlias = "reyamfdebug"
+            keyPassword = "reyamfdebug"
+            storeType = "PKCS12"
         }
     }
     compileOptions {
