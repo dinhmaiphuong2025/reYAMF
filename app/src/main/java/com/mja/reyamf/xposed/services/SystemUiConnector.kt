@@ -61,19 +61,31 @@ object SystemUiConnector {
         runCatching {
             // Không hook theo tên class SystemUIApplication: trên ROM này
             // XposedHelpers.findClass không resolve được tên đó (ClassNotFound).
-            // Application.onCreate là entry point ổn định cho mọi process.
-            XposedBridge.hookAllMethods(
-                android.app.Application::class.java,
-                "onCreate",
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        val app = param.thisObject as? Context ?: return
-                        if (app.packageName != SYSTEM_UI_PACKAGE) return
-                        start(app)
-                    }
+            // Application.onCreate không đủ vì subclass có thể không gọi super,
+            // nên hook entry point của framework: Instrumentation.callApplicationOnCreate
+            // và Application.attach(Context). start() idempotent nên hook trùng vô hại.
+            val hook = object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val app = param.args.getOrNull(0) as? Context ?: return
+                    if (app.packageName != SYSTEM_UI_PACKAGE) return
+                    start(app)
                 }
+            }
+            XposedHelpers.findAndHookMethod(
+                "android.app.Instrumentation",
+                lpparam.classLoader,
+                "callApplicationOnCreate",
+                android.app.Application::class.java,
+                hook
             )
-            Log.d(TAG, "hook installed on Application.onCreate")
+            XposedHelpers.findAndHookMethod(
+                "android.app.Application",
+                lpparam.classLoader,
+                "attach",
+                Context::class.java,
+                hook
+            )
+            Log.d(TAG, "hook installed (callApplicationOnCreate + Application.attach)")
         }.onFailure { Log.e(TAG, "hook install failed", it) }
     }
 
