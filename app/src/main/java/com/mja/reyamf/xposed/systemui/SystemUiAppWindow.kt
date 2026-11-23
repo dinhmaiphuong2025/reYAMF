@@ -60,6 +60,7 @@ class SystemUiAppWindow(
         private const val BOTTOM_SWIPE_UP_CLOSE_PX = 60f
         private const val BOTTOM_SWIPE_DOWN_FULLSCREEN_PX = 80f
         private const val BOTTOM_TAP_BACK_PX = 15f
+        private const val DIR_LOCK_PX = 12f
         private const val RESIZE_COMMIT_FALLBACK_MS = 120L
     }
 
@@ -444,41 +445,48 @@ class SystemUiAppWindow(
 
     private fun createBottomBarListener(): View.OnTouchListener = object : View.OnTouchListener {
         private var downRawY = 0f
-        private var armedDir = 0   // 0 = chưa, 1 = fullscreen (kéo xuống), -1 = đóng (kéo lên)
+        private var lockedDir = 0   // +1 = thao tác fullscreen (kéo xuống), -1 = thao tác đóng (kéo lên), 0 = chưa khoá
+        private var armed = false
 
         override fun onTouch(v: View, event: MotionEvent): Boolean {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downRawY = event.rawY
-                    armedDir = 0
+                    lockedDir = 0
+                    armed = false
                     Log.d("CONTROL_TOUCH", "bottomBar down rawY=${event.rawY}")
                     return true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dy = event.rawY - downRawY
-                    when {
-                        dy > 0 -> {
+                    // Khoá hướng ở lần di chuyển đáng kể đầu tiên: mỗi lần kéo chỉ thuộc MỘT thao tác.
+                    if (lockedDir == 0 && abs(dy) > DIR_LOCK_PX) {
+                        lockedDir = if (dy > 0) 1 else -1
+                        Log.d("CONTROL_TOUCH", "bottomBar lock dir=$lockedDir")
+                    }
+                    when (lockedDir) {
+                        1 -> {
                             val p = (dy / BOTTOM_SWIPE_DOWN_FULLSCREEN_PX).coerceIn(0f, 1f)
                             applyGestureScale(1f + 0.06f * p)
-                            if (p >= 1f && armedDir != 1) {
-                                armedDir = 1
+                            if (p >= 1f && !armed) {
+                                armed = true
                                 vibrateFeedback()
                                 Log.d("CONTROL_TOUCH", "bottomBar armed FULLSCREEN")
-                            } else if (p < 0.6f && armedDir == 1) {
-                                armedDir = 0
+                            } else if (p < 0.6f && armed) {
+                                armed = false
                                 vibrateFeedback(12L)
                                 Log.d("CONTROL_TOUCH", "bottomBar disarmed (pulled back)")
                             }
                         }
-                        dy < 0 -> {
+                        -1 -> {
                             val p = (-dy / BOTTOM_SWIPE_UP_CLOSE_PX).coerceIn(0f, 1f)
                             applyGestureScale(1f - 0.10f * p)
-                            if (p >= 1f && armedDir != -1) {
-                                armedDir = -1
+                            if (p >= 1f && !armed) {
+                                armed = true
                                 vibrateFeedback()
                                 Log.d("CONTROL_TOUCH", "bottomBar armed CLOSE")
-                            } else if (p < 0.6f && armedDir == -1) {
-                                armedDir = 0
+                            } else if (p < 0.6f && armed) {
+                                armed = false
                                 vibrateFeedback(12L)
                                 Log.d("CONTROL_TOUCH", "bottomBar disarmed (pulled back)")
                             }
@@ -490,19 +498,24 @@ class SystemUiAppWindow(
                     val dy = event.rawY - downRawY
                     animateGestureScale(1f)
                     when {
-                        // Chỉ chốt khi vẫn còn armed VÀ vượt ngưỡng tại thời điểm thả.
-                        armedDir == 1 && dy > BOTTOM_SWIPE_DOWN_FULLSCREEN_PX ->
+                        // Chỉ chốt đúng thao tác đã khoá; kéo ngược hướng còn lại KHÔNG bao giờ kích hoạt.
+                        armed && lockedDir == 1 && dy > BOTTOM_SWIPE_DOWN_FULLSCREEN_PX ->
                             transitionTo(WindowState.FULLSCREEN)
-                        armedDir == -1 && dy < -BOTTOM_SWIPE_UP_CLOSE_PX -> close()
-                        abs(dy) < BOTTOM_TAP_BACK_PX -> sendBackKey()
-                        else -> Log.d("CONTROL_TOUCH", "bottomBar cancel dy=$dy armedDir=$armedDir")
+                        armed && lockedDir == -1 && dy < -BOTTOM_SWIPE_UP_CLOSE_PX -> close()
+                        lockedDir == 0 && abs(dy) < BOTTOM_TAP_BACK_PX -> sendBackKey()
+                        else -> Log.d(
+                            "CONTROL_TOUCH",
+                            "bottomBar cancel dy=$dy lockedDir=$lockedDir armed=$armed"
+                        )
                     }
-                    armedDir = 0
+                    lockedDir = 0
+                    armed = false
                     return true
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     animateGestureScale(1f)
-                    armedDir = 0
+                    lockedDir = 0
+                    armed = false
                     return true
                 }
             }
