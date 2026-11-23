@@ -414,12 +414,16 @@ class SystemUiAppWindow(
         val visible = imeHeight > 0
         if (visible == imeVisible) return
         imeVisible = visible
-        // KHÔNG dùng context.resources (display context tạo lúc mở cửa sổ, metrics/orientation
-        // không cập nhật sau khi xoay). Lấy trực tiếp từ Display của display 0.
-        val dm = context.getSystemService(DisplayManager::class.java)
-        val display = dm?.getDisplay(Display.DEFAULT_DISPLAY)
+        // Lấy thông số sống từ Display của chính view (display context tạo lúc mở cửa sổ
+        // giữ metrics/orientation cũ sau khi xoay).
+        val display = binding.root.display
         val size = android.graphics.Point().also { display?.getRealSize(it) }
-        val screenHeight = if (size.y > 0) size.y else context.resources.displayMetrics.heightPixels
+        val metrics = runCatching { wm.maximumWindowMetrics.bounds }.getOrNull()
+        val screenHeight = when {
+            size.y > 0 -> size.y
+            metrics != null && metrics.height() > 0 -> metrics.height()
+            else -> context.resources.displayMetrics.heightPixels
+        }
         val rotation = display?.rotation ?: Surface.ROTATION_0
         val portrait = rotation == Surface.ROTATION_0 || rotation == Surface.ROTATION_180
         val lp = currentParams()
@@ -433,9 +437,16 @@ class SystemUiAppWindow(
                     animateWindowY(lp.y, targetY)
                 }
             } else {
-                if (lp.y + lp.height > imeTop) {
-                    val targetH = (imeTop - lp.y).coerceAtLeast(minHeight)
-                    Log.d(TAG, "IME shrink height ${lp.height} -> $targetH")
+                // Ngang: đưa cửa sổ lên sát đỉnh rồi thu chiều cao vừa phần còn lại.
+                if (lp.y != 0) {
+                    lp.y = 0
+                    runCatching { wm.updateViewLayout(binding.root, lp) }
+                }
+                val targetH = imeTop.coerceAtMost(baseHeight).coerceAtLeast(
+                    minHeight.coerceAtMost(imeTop.coerceAtLeast(1))
+                )
+                if (lp.height != targetH) {
+                    Log.d(TAG, "IME shrink height ${lp.height} -> $targetH (imeTop=$imeTop)")
                     animateWindowHeight(lp.height, targetH)
                 }
             }
@@ -450,6 +461,7 @@ class SystemUiAppWindow(
                     Log.d(TAG, "IME restore height ${lp.height} -> $baseHeight")
                     animateWindowHeight(lp.height, baseHeight)
                 }
+                if (lp.y != baseY) animateWindowY(lp.y, baseY)
             }
         }
     }
