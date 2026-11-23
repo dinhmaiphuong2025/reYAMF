@@ -50,6 +50,7 @@ object SystemUiBackend {
     private val windowList = mutableListOf<Int>()          // head = cửa sổ trên cùng
     private val taskToDisplay = mutableMapOf<Int, Int>()
     private var taskListener: ITaskStackListener? = null
+    private var taskListenerPending = false
     private var nextRequestId = 1L
     @Volatile private var countListener: ((Int) -> Unit)? = null
 
@@ -131,25 +132,30 @@ object SystemUiBackend {
 
     private fun ensureTaskListener() {
         synchronized(lock) {
-            if (taskListener != null) return
+            if (taskListener != null || taskListenerPending) return
+            taskListenerPending = true
         }
         val listener = runCatching {
             ITaskStackListenerProxy.newInstance(SystemUiBackend::class.java.classLoader) { args, method ->
                 onTaskStackEvent(method.name, args)
             }
         }.getOrElse { t ->
+            synchronized(lock) { taskListenerPending = false }
             Log.w(TAG, "create task listener failed", t)
             return
         }
         val registered = runCatching {
             asSystem { Instances.activityTaskManager.registerTaskStackListener(listener) }
         }.isSuccess
-        if (!registered) {
-            Log.w(TAG, "registerTaskStackListener failed")
-            return
+        synchronized(lock) {
+            taskListenerPending = false
+            if (registered && taskListener == null) {
+                taskListener = listener
+            } else if (!registered) {
+                Log.w(TAG, "registerTaskStackListener failed")
+            }
         }
-        synchronized(lock) { if (taskListener == null) taskListener = listener }
-        Log.d(TAG, "task listener registered")
+        if (registered) Log.d(TAG, "task listener registered")
     }
 
     private fun unregisterTaskListenerLocked() {
@@ -161,12 +167,15 @@ object SystemUiBackend {
 
     private fun onTaskStackEvent(methodName: String, args: Array<Any?>) {
         when (methodName) {
-            "onTaskRemovalStarted" -> {
+            "onTaskRemovalStarted", "onTaskRemoved" -> {
                 val taskId = extractTaskId(args.getOrNull(0))
+                Log.d(TAG, "task event=$methodName taskId=$taskId")
                 if (taskId > 0) onTaskRemoved(taskId)
             }
-            "onTaskCreated", "onTaskStackChanged", "onTaskMovedToFront", "onTaskRemoved" ->
+            "onTaskCreated", "onTaskStackChanged", "onTaskMovedToFront" -> {
+                Log.d(TAG, "task event=$methodName")
                 refreshTaskMap()
+            }
         }
     }
 
