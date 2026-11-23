@@ -186,6 +186,8 @@ class SystemUiAppWindow(
             Log.d("SIZE_DEBUG", "post: topHandle w=${binding.topHandle.width} h=${binding.topHandle.height} l=${binding.topHandle.left} t=${binding.topHandle.top} r=${binding.topHandle.right} b=${binding.topHandle.bottom}")
             Log.d("SIZE_DEBUG", "post: bottomBar w=${binding.bottomBar.width} h=${binding.bottomBar.height} l=${binding.bottomBar.left} t=${binding.bottomBar.top} r=${binding.bottomBar.right} b=${binding.bottomBar.bottom}")
             Log.d("SIZE_DEBUG", "post: texture w=${binding.viewTexture.width} h=${binding.viewTexture.height}")
+            Log.d("SIZE_DEBUG", "post: resizeBR l=${binding.resizeBottomRight.left} t=${binding.resizeBottomRight.top} r=${binding.resizeBottomRight.right} b=${binding.resizeBottomRight.bottom}")
+            Log.d("SIZE_DEBUG", "post: resizeBL l=${binding.resizeBottomLeft.left} t=${binding.resizeBottomLeft.top} r=${binding.resizeBottomLeft.right} b=${binding.resizeBottomLeft.bottom}")
             val lp = currentParams()
             Log.d(
                 "SIZE_DEBUG",
@@ -480,6 +482,7 @@ class SystemUiAppWindow(
         private var targetWindowX = 0
 
         override fun onTouch(v: View, event: MotionEvent): Boolean {
+            Log.d("CONTROL_TOUCH", "resize(isLeft=$isLeft) action=${event.actionMasked} rawX=${event.rawX} rawY=${event.rawY}")
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     val lp = currentParams()
