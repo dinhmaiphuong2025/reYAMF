@@ -51,6 +51,8 @@ object SystemUiBackend {
     private val taskToDisplay = mutableMapOf<Int, Int>()
     private var taskListener: ITaskStackListener? = null
     private var taskListenerPending = false
+    private var lastRemovedTaskId = -1
+    private var lastRemovedAt = 0L
     private var nextRequestId = 1L
     @Volatile private var countListener: ((Int) -> Unit)? = null
 
@@ -197,23 +199,41 @@ object SystemUiBackend {
     }
 
     private fun onTaskRemoved(taskId: Int) {
-        var displayId = -1
+        // ByteBuddy proxy bắt cùng một event 2 lần; debounce theo taskId.
+        val now = SystemClock.uptimeMillis()
+        synchronized(lock) {
+            if (taskId == lastRemovedTaskId && now - lastRemovedAt < 1000) return
+            lastRemovedTaskId = taskId
+            lastRemovedAt = now
+        }
+        val displayId = synchronized(lock) { taskToDisplay[taskId] } ?: run {
+            Log.d(TAG, "onTaskRemoved: taskId=$taskId not mapped, ignore")
+            return
+        }
+        // Move task sang display khác cũng phát onTaskRemoved; chỉ coi là đóng khi display hết task.
+        val stillHasTasks = runCatching {
+            asSystem { Instances.activityTaskManager.getAllRootTaskInfosOnDisplay(displayId).isNotEmpty() }
+        }.getOrDefault(true)
+        if (stillHasTasks) {
+            Log.d(TAG, "onTaskRemoved: taskId=$taskId still on displayId=$displayId, keep window")
+            refreshTaskMap()
+            return
+        }
+
         var callback: ISystemUiCallback? = null
         val count: Int
         synchronized(lock) {
-            displayId = taskToDisplay.remove(taskId) ?: -1
-            if (displayId >= 0 && windowList.remove(displayId)) {
+            taskToDisplay.remove(taskId)
+            if (windowList.remove(displayId)) {
                 callback = clients.values.firstOrNull { !it.dead }?.callback
             }
             if (windowList.isEmpty()) unregisterTaskListenerLocked()
             count = windowList.size
         }
         notifyCount(count)
-        if (displayId >= 0) {
-            runCatching { callback?.onTaskClosed(displayId, taskId) }
-                .onFailure { Log.w(TAG, "onTaskClosed failed displayId=$displayId", it) }
-            Log.d(TAG, "onTaskRemoved: displayId=$displayId taskId=$taskId windows=$count")
-        }
+        runCatching { callback?.onTaskClosed(displayId, taskId) }
+            .onFailure { Log.w(TAG, "onTaskClosed failed displayId=$displayId", it) }
+        Log.d(TAG, "onTaskRemoved: displayId=$displayId taskId=$taskId windows=$count")
     }
 
     /** Chặn caller không phải SystemUI. Gọi ở đầu mỗi method đặc quyền trong YAMFManager. */
