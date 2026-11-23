@@ -582,7 +582,7 @@ class SystemUiAppWindow(
                                 armed = true
                                 vibrateFeedback()
                                 Log.d("CONTROL_TOUCH", "bottomBar armed FULLSCREEN")
-                            } else if (p < 0.6f && armed) {
+                            } else if (p < 0.4f && armed) {
                                 armed = false
                                 vibrateFeedback(12L)
                                 Log.d("CONTROL_TOUCH", "bottomBar disarmed (pulled back)")
@@ -595,7 +595,7 @@ class SystemUiAppWindow(
                                 armed = true
                                 vibrateFeedback()
                                 Log.d("CONTROL_TOUCH", "bottomBar armed CLOSE")
-                            } else if (p < 0.6f && armed) {
+                            } else if (p < 0.4f && armed) {
                                 armed = false
                                 vibrateFeedback(12L)
                                 Log.d("CONTROL_TOUCH", "bottomBar disarmed (pulled back)")
@@ -648,20 +648,23 @@ class SystemUiAppWindow(
     }
 
     private fun vibrateFeedback(durationMs: Long = 25L) {
-        runCatching {
-            val vibrator = context.getSystemService(android.os.Vibrator::class.java) ?: return
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                vibrator.vibrate(
-                    android.os.VibrationEffect.createOneShot(
-                        durationMs,
-                        android.os.VibrationEffect.DEFAULT_AMPLITUDE
-                    )
-                )
-            } else {
-                @Suppress("DEPRECATION")
-                vibrator.vibrate(durationMs)
-            }
+        val vm = context.getSystemService(android.os.VibratorManager::class.java)
+        val vibrator = vm?.defaultVibrator
+            ?: context.getSystemService(android.os.Vibrator::class.java)
+            ?: return
+        if (!vibrator.hasVibrator()) {
+            Log.w(TAG, "vibrate skipped: no vibrator")
+            return
         }
+        val attrs = android.os.VibrationAttributes.createForUsage(
+            android.os.VibrationAttributes.USAGE_TOUCH
+        )
+        runCatching {
+            vibrator.vibrate(
+                android.os.VibrationEffect.createOneShot(durationMs, 200),
+                attrs
+            )
+        }.onFailure { Log.w(TAG, "vibrate failed dur=$durationMs", it) }
     }
 
     private fun cornerResizeListener(isLeft: Boolean) = object : View.OnTouchListener {
