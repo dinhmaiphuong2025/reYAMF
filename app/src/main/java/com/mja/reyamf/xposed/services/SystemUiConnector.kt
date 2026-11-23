@@ -1,7 +1,6 @@
 package com.mja.reyamf.xposed.services
 
 import android.content.Context
-import android.content.Intent
 import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.os.Bundle
@@ -39,8 +38,6 @@ object SystemUiConnector {
     private const val BACKOFF_MIN_MS = 250L
     private const val BACKOFF_MAX_MS = 2000L
 
-    private const val DEBUG_CREATE_WINDOW = "com.mja.reyamf.DEBUG_CREATE_WINDOW"
-
     @Volatile private var appContext: Context? = null
     @Volatile private var generation = 0
     @Volatile private var clientId = -1L
@@ -50,10 +47,8 @@ object SystemUiConnector {
     private var manager: IYAMFManager? = null
     private var binderRef: IBinder? = null
     private var deathRecipient: IBinder.DeathRecipient? = null
-    private var debugTriggerInstalled = false
 
     private val windows = ConcurrentHashMap<Int, SystemUiAppWindow>()
-    private val taskByDisplay = ConcurrentHashMap<Int, Int>()
 
     fun install(lpparam: XC_LoadPackage.LoadPackageParam) {
         runCatching {
@@ -163,7 +158,6 @@ object SystemUiConnector {
         deathRecipient = death
         clientId = id
         Log.d(TAG, "client registered clientId=$id")
-        installDebugTrigger(appContext)
     }
 
     private fun onBinderDied(gen: Int) {
@@ -189,8 +183,7 @@ object SystemUiConnector {
         }
 
         override fun onTaskStateChanged(displayId: Int, taskId: Int, visible: Boolean) {
-            if (visible && taskId > 0) taskByDisplay[displayId] = taskId
-            Log.d(TAG, "onTaskStateChanged display=$displayId task=$taskId visible=$visible")
+            // Stage 3b: backend không phát callback này; giữ override để khớp AIDL.
         }
 
         override fun onTaskClosed(displayId: Int, taskId: Int) {
@@ -225,45 +218,24 @@ object SystemUiConnector {
                 client = iface,
                 clientId = id,
                 flags = 1164,
-                taskIdProvider = { taskByDisplay[window.displayId] ?: taskId },
+                taskIdProvider = { taskId },
                 onClosed = { d -> windows.remove(d) }
             )
             // Surface của TextureView đến bất đồng bộ: displayId chỉ hợp lệ trong callback này.
             window.setup { d ->
                 windows[d] = window
-                Log.d(TAG, "window ready displayId=$d taskId=$taskId")
+                Log.d(TAG, "window ready displayId=$d taskId=$taskId comp=$componentName")
                 runCatching {
-                    // Không dùng launchStartCommand: StartCmd.startAuto gọi TipUtil.showToast
-                    // trong nhánh lỗi -> NPE trên Binder thread của system_server.
+                    // Component được ưu tiên (app list/sidebar: hiện ngay, không cần đổi focus).
+                    // taskId <= 0 để backend tự lấy task đang hiển thị khi cần fullscreen.
                     when {
-                        taskId > 0 -> iface.moveTaskToDisplay(id, taskId, d)
                         !componentName.isNullOrEmpty() ->
                             iface.startActivityOnDisplay(id, d, componentName, userId)
+                        taskId > 0 -> iface.moveTaskToDisplay(id, taskId, d)
                         else -> Log.w(TAG, "nothing to launch: taskId=$taskId comp=$componentName")
                     }
                 }.onFailure { Log.e(TAG, "launch task failed displayId=$d", it) }
             }
         }.onFailure { Log.e(TAG, "createWindow failed", it) }
-    }
-
-    /** Stage 3a: trigger test qua broadcast, sẽ xoá ở stage 3b. */
-    private fun installDebugTrigger(ctx: Context?) {
-        if (ctx == null || debugTriggerInstalled) return
-        debugTriggerInstalled = true
-        runCatching {
-            ctx.registerReceiver(
-                object : android.content.BroadcastReceiver() {
-                    override fun onReceive(c: Context, i: Intent) {
-                        val taskId = i.getIntExtra("taskId", 0)
-                        val comp = i.getStringExtra("component")
-                        Log.d(TAG, "DEBUG_CREATE_WINDOW taskId=$taskId comp=$comp")
-                        Handler(Looper.getMainLooper()).post { createWindowOnMain(comp, 0, taskId) }
-                    }
-                },
-                android.content.IntentFilter(DEBUG_CREATE_WINDOW),
-                Context.RECEIVER_EXPORTED
-            )
-            Log.d(TAG, "debug trigger installed")
-        }.onFailure { Log.w(TAG, "debug trigger install failed", it) }
     }
 }

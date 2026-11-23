@@ -2,6 +2,8 @@ package com.mja.reyamf.xposed.services
 
 import android.content.ComponentName
 import android.hardware.display.VirtualDisplay
+import android.app.ITaskStackListener
+import android.app.ITaskStackListenerProxy
 import android.os.Binder
 import android.os.IBinder
 import android.os.SystemClock
@@ -16,6 +18,7 @@ import com.github.kyuubiran.ezxhelper.utils.invokeMethod
 import com.mja.reyamf.common.model.StartCmd
 import com.mja.reyamf.xposed.ISystemUiCallback
 import com.mja.reyamf.xposed.utils.Instances
+import com.mja.reyamf.xposed.utils.getTopRootTask
 import com.mja.reyamf.xposed.utils.moveTask
 import com.mja.reyamf.xposed.utils.startActivity
 import com.mja.reyamf.xposed.utils.startAuto
@@ -42,6 +45,167 @@ object SystemUiBackend {
     private val displays = mutableMapOf<Int, VirtualDisplay>()
     private val displayOwners = mutableMapOf<Int, Long>()
     private var nextClientId = 1L
+
+    // --- Window order/count: backend là nguồn duy nhất (stage 3b) ---
+    private val windowList = mutableListOf<Int>()          // head = cửa sổ trên cùng
+    private val taskToDisplay = mutableMapOf<Int, Int>()
+    private var taskListener: ITaskStackListener? = null
+    private var nextRequestId = 1L
+    @Volatile private var countListener: ((Int) -> Unit)? = null
+
+    fun setCountListener(listener: ((Int) -> Unit)?) {
+        countListener = listener
+    }
+
+    fun windowCount(): Int = synchronized(lock) { windowList.size }
+
+    /** Gửi yêu cầu tạo cửa sổ sang SystemUI. Trả false khi không có client live. */
+    fun requestCreateWindow(startCmd: StartCmd?): Boolean {
+        val requestId: Long
+        val clientId: Long
+        val callback: ISystemUiCallback
+        synchronized(lock) {
+            val live = clients.entries.firstOrNull { !it.value.dead } ?: run {
+                Log.w(TAG, "requestCreateWindow: no live SystemUI client")
+                return false
+            }
+            requestId = nextRequestId++
+            clientId = live.key
+            callback = live.value.callback
+        }
+        val component = startCmd?.componentName?.flattenToString()
+        val userId = startCmd?.userId ?: 0
+        val taskId = startCmd?.taskId ?: 0
+        val sent = runCatching { callback.onCreateWindow(requestId, component, userId, taskId) }
+            .onFailure { Log.w(TAG, "onCreateWindow failed requestId=$requestId", it) }
+            .isSuccess
+        if (!sent) {
+            synchronized(lock) { onClientDied(clientId) }
+            return false
+        }
+        ensureTaskListener()
+        Log.d(TAG, "requestCreateWindow: requestId=$requestId clientId=$clientId comp=$component user=$userId task=$taskId")
+        return true
+    }
+
+    fun addWindow(displayId: Int) {
+        if (displayId < 0) return
+        val count: Int
+        val changed: Boolean
+        synchronized(lock) {
+            changed = !windowList.contains(displayId)
+            if (changed) windowList.add(0, displayId)
+            count = windowList.size
+        }
+        if (changed) notifyCount(count)
+    }
+
+    fun removeWindow(displayId: Int) {
+        val count: Int
+        val changed: Boolean
+        synchronized(lock) {
+            changed = windowList.remove(displayId)
+            taskToDisplay.entries.removeAll { it.value == displayId }
+            if (windowList.isEmpty()) unregisterTaskListenerLocked()
+            count = windowList.size
+        }
+        if (changed) notifyCount(count)
+    }
+
+    fun isTop(displayId: Int): Boolean =
+        synchronized(lock) { windowList.isEmpty() || windowList[0] == displayId }
+
+    fun moveToTop(displayId: Int) {
+        synchronized(lock) {
+            if (!windowList.remove(displayId)) return
+            windowList.add(0, displayId)
+        }
+    }
+
+    private fun notifyCount(count: Int) {
+        runCatching { countListener?.invoke(count) }
+            .onFailure { Log.w(TAG, "countListener failed count=$count", it) }
+    }
+
+    // --- Task lifecycle ---
+
+    private fun ensureTaskListener() {
+        synchronized(lock) {
+            if (taskListener != null) return
+        }
+        val listener = runCatching {
+            ITaskStackListenerProxy.newInstance(SystemUiBackend::class.java.classLoader) { args, method ->
+                onTaskStackEvent(method.name, args)
+            }
+        }.getOrElse { t ->
+            Log.w(TAG, "create task listener failed", t)
+            return
+        }
+        val registered = runCatching {
+            asSystem { Instances.activityTaskManager.registerTaskStackListener(listener) }
+        }.isSuccess
+        if (!registered) {
+            Log.w(TAG, "registerTaskStackListener failed")
+            return
+        }
+        synchronized(lock) { if (taskListener == null) taskListener = listener }
+        Log.d(TAG, "task listener registered")
+    }
+
+    private fun unregisterTaskListenerLocked() {
+        val listener = taskListener ?: return
+        taskListener = null
+        runCatching { asSystem { Instances.activityTaskManager.unregisterTaskStackListener(listener) } }
+            .onFailure { Log.w(TAG, "unregisterTaskStackListener failed", it) }
+    }
+
+    private fun onTaskStackEvent(methodName: String, args: Array<Any?>) {
+        when (methodName) {
+            "onTaskRemovalStarted" -> {
+                val taskId = extractTaskId(args.getOrNull(0))
+                if (taskId > 0) onTaskRemoved(taskId)
+            }
+            "onTaskCreated", "onTaskStackChanged", "onTaskMovedToFront", "onTaskRemoved" ->
+                refreshTaskMap()
+        }
+    }
+
+    private fun extractTaskId(arg: Any?): Int = when (arg) {
+        is Int -> arg
+        null -> -1
+        else -> runCatching { arg.javaClass.getField("taskId").getInt(arg) }.getOrDefault(-1)
+    }
+
+    private fun refreshTaskMap() {
+        val snapshot = synchronized(lock) { windowList.toList() }
+        if (snapshot.isEmpty()) return
+        snapshot.forEach { displayId ->
+            val top = runCatching { asSystem { getTopRootTask(displayId) } }.getOrNull() ?: return@forEach
+            synchronized(lock) {
+                if (windowList.contains(displayId)) taskToDisplay[top.taskId] = displayId
+            }
+        }
+    }
+
+    private fun onTaskRemoved(taskId: Int) {
+        var displayId = -1
+        var callback: ISystemUiCallback? = null
+        val count: Int
+        synchronized(lock) {
+            displayId = taskToDisplay.remove(taskId) ?: -1
+            if (displayId >= 0 && windowList.remove(displayId)) {
+                callback = clients.values.firstOrNull { !it.dead }?.callback
+            }
+            if (windowList.isEmpty()) unregisterTaskListenerLocked()
+            count = windowList.size
+        }
+        notifyCount(count)
+        if (displayId >= 0) {
+            runCatching { callback?.onTaskClosed(displayId, taskId) }
+                .onFailure { Log.w(TAG, "onTaskClosed failed displayId=$displayId", it) }
+            Log.d(TAG, "onTaskRemoved: displayId=$displayId taskId=$taskId windows=$count")
+        }
+    }
 
     /** Chặn caller không phải SystemUI. Gọi ở đầu mỗi method đặc quyền trong YAMFManager. */
     fun requireSystemUiCaller() {
@@ -174,15 +338,25 @@ object SystemUiBackend {
     }
 
     fun releaseWindow(clientId: Long, displayId: Int) {
+        var callback: ISystemUiCallback? = null
+        var taskId = 0
         synchronized(lock) {
             val client = ownedClient(clientId, displayId) ?: return
+            taskId = taskToDisplay.entries.firstOrNull { it.value == displayId }?.key ?: 0
             val vd = displays.remove(displayId)
             displayOwners.remove(displayId)
             client.displays.remove(displayId)
             runCatching { vd?.surface = null }
             runCatching { vd?.release() }
             client.surfaces.remove(displayId)?.let { runCatching { it.release() } }
-            Log.d(TAG, "releaseWindow: clientId=$clientId displayId=$displayId")
+            callback = clients.values.firstOrNull { !it.dead }?.callback
+            Log.d(TAG, "releaseWindow: clientId=$clientId displayId=$displayId taskId=$taskId")
+        }
+        removeWindow(displayId)
+        // Báo cho connector dọn map; SystemUiAppWindow đã destroyed nên phía client là no-op.
+        if (callback != null) {
+            runCatching { callback?.onTaskClosed(displayId, taskId) }
+                .onFailure { Log.w(TAG, "releaseWindow onTaskClosed failed displayId=$displayId", it) }
         }
     }
 
@@ -208,18 +382,49 @@ object SystemUiBackend {
             Log.w(TAG, "startActivityOnDisplay: bad component '$componentName'")
             return
         }
-        asSystem { startActivity(Instances.systemContext, component, userId, displayId) }
+        val ok = runCatching {
+            asSystem { startActivity(Instances.systemContext, component, userId, displayId) }
+        }.onFailure { Log.w(TAG, "startActivityOnDisplay failed $component", it) }.isSuccess
+        if (ok) {
+            addWindow(displayId)
+            ensureTaskListener()
+        }
     }
 
     fun moveTaskToDisplay(clientId: Long, taskId: Int, displayId: Int) {
         synchronized(lock) { ownedClient(clientId, displayId) ?: return }
-        asSystem { moveTask(taskId, displayId) }
+        val ok = runCatching { asSystem { moveTask(taskId, displayId) } }
+            .onFailure { Log.w(TAG, "moveTaskToDisplay failed taskId=$taskId displayId=$displayId", it) }
+            .isSuccess
+        if (ok) {
+            synchronized(lock) { taskToDisplay[taskId] = displayId }
+            addWindow(displayId)
+            ensureTaskListener()
+        }
     }
 
     fun moveTaskToDefaultDisplay(clientId: Long, taskId: Int) {
+        var resolvedTaskId = taskId
         synchronized(lock) {
             if (clients[clientId] == null) return
-            asSystem { moveTask(taskId, 0) }
+        }
+        if (resolvedTaskId <= 0) {
+            // taskId <= 0: lấy task đang hiển thị trên cửa sổ của client này.
+            val displayIds = synchronized(lock) { windowList.toList() }
+            resolvedTaskId = displayIds.firstNotNullOfOrNull { d ->
+                runCatching { asSystem { getTopRootTask(d) } }.getOrNull()?.taskId
+            } ?: 0
+        }
+        if (resolvedTaskId <= 0) {
+            Log.w(TAG, "moveTaskToDefaultDisplay: no task found for clientId=$clientId")
+            return
+        }
+        val moved = runCatching { asSystem { moveTask(resolvedTaskId, 0) } }
+            .onFailure { Log.w(TAG, "moveTaskToDefaultDisplay failed taskId=$resolvedTaskId", it) }
+            .isSuccess
+        if (moved) {
+            synchronized(lock) { taskToDisplay.remove(resolvedTaskId) }
+            Log.d(TAG, "moveTaskToDefaultDisplay: taskId=$resolvedTaskId")
         }
     }
 

@@ -73,11 +73,11 @@ object YAMFManager : IYAMFManager.Stub() {
     const val SOURCE_TASKBAR = 2
     const val SOURCE_POPUP = 3
 
-    private val windowList = mutableListOf<Int>()
     lateinit var config: Config
     val configFile = File("/data/system/reYAMF.json")
-    private var openWindowCount = 0
     private val iOpenCountListenerSet = mutableSetOf<IOpenCountListener>()
+    private val openWindowCount: Int
+        get() = SystemUiBackend.windowCount()
     lateinit var activityManagerService: Any
     private val listeners = mutableListOf<TopDisplayId>()
     var currentDisplayId = 0
@@ -118,13 +118,19 @@ object YAMFManager : IYAMFManager.Stub() {
         log(TAG, "config: $config")
     }
 
-    private fun addWindow(id: Int) {
-        windowList.add(0, id)
-        openWindowCount++
+    private fun addWindow(id: Int) = SystemUiBackend.addWindow(id)
+
+    fun removeWindow(id: Int) = SystemUiBackend.removeWindow(id)
+
+    fun isTop(id: Int) = SystemUiBackend.isTop(id)
+
+    fun moveToTop(id: Int) = SystemUiBackend.moveToTop(id)
+
+    fun notifyWindowCount(count: Int) {
         val toRemove = mutableSetOf<IOpenCountListener>()
         iOpenCountListenerSet.forEach {
             runCatching {
-                it.onUpdate(openWindowCount)
+                it.onUpdate(count)
             }.onFailure { _ ->
                 toRemove.add(it)
             }
@@ -132,19 +138,14 @@ object YAMFManager : IYAMFManager.Stub() {
         iOpenCountListenerSet.removeAll(toRemove)
     }
 
-    fun removeWindow(id: Int) {
-        windowList.remove(id)
-    }
-
-    fun isTop(id: Int) = if (windowList.isNotEmpty()) windowList[0] == id else true
-
-    fun moveToTop(id: Int) {
-        windowList.remove(id)
-        windowList.add(0, id)
-    }
-
     fun createWindow(startCmd: StartCmd?) {
         Instances.iStatusBarService.collapsePanels()
+        if (SystemUiBackend.requestCreateWindow(startCmd)) return
+        log(TAG, "createWindow: no live SystemUI client; using legacy AppWindow fallback")
+        createLegacyAppWindow(startCmd)
+    }
+
+    private fun createLegacyAppWindow(startCmd: StartCmd?) {
         AppWindow(
             CommonContextWrapper.createAppCompatContext(systemUiContext.createContext()),
             config.flags
@@ -156,6 +157,7 @@ object YAMFManager : IYAMFManager.Stub() {
 
     init {
         log(TAG, "reYAMF service initialized")
+        SystemUiBackend.setCountListener { count -> notifyWindowCount(count) }
     }
 
     override fun getVersionName(): String {

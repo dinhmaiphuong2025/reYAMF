@@ -210,11 +210,12 @@ class SystemUiAppWindow(
             WindowState.NORMAL -> Unit
             WindowState.FULLSCREEN -> {
                 val taskId = taskIdProvider()
-                if (taskId <= 0 || displayId < 0) {
-                    Log.w(TAG, "fullscreen: no task for displayId=$displayId taskId=$taskId")
+                if (displayId < 0) {
+                    Log.w(TAG, "fullscreen: no display taskId=$taskId displayId=$displayId")
                     state = WindowState.NORMAL
                     return
                 }
+                // taskId <= 0: backend tự lấy task đang hiển thị trên display này.
                 runCatching { client.moveTaskToDefaultDisplay(clientId, taskId) }
                     .onFailure { Log.e(TAG, "moveTaskToDefaultDisplay failed taskId=$taskId", it) }
                 onDestroy()
