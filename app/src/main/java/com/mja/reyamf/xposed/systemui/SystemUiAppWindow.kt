@@ -88,6 +88,11 @@ class SystemUiAppWindow(
 
     private var state = WindowState.NORMAL
     private var quickMenuHideJob: Job? = null
+    private var imeWatcher: Runnable? = null
+    private var imeAnimator: android.animation.ValueAnimator? = null
+    private var imeVisible = false
+    private var baseY = 0
+    private var baseHeight = 0
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
     private val minWidth = 120.ctxDp()
     private val minHeight = 160.ctxDp()
@@ -160,6 +165,9 @@ class SystemUiAppWindow(
         }
 
         wm.addView(binding.root, params)
+        baseY = params.y
+        baseHeight = params.height
+        startImeWatcher()
 
         binding.topHandle.setOnTouchListener(createTopHandleListener())
         binding.bottomBar.setOnTouchListener(createBottomBarListener())
@@ -239,6 +247,9 @@ class SystemUiAppWindow(
         if (destroyed) return
         destroyed = true
         cancelPendingResizeCommit()
+        stopImeWatcher()
+        imeAnimator?.cancel()
+        imeAnimator = null
         quickMenuHideJob?.cancel()
         quickMenuHideJob = null
         runCatching { binding.root.animate().cancel() }
@@ -303,7 +314,11 @@ class SystemUiAppWindow(
             vdWidth = w
             vdHeight = h
             Log.d("SIZE_DEBUG", "created vd=${vd.display.width}x${vd.display.height} dpi=$newDpi flags=$vdFlags (cfg=$flags) displayId=$displayId")
-            val policy = if (config.showImeInWindow) 1 else 0
+            val policy = if (config.showImeInWindow) {
+                android.view.WindowManagerHidden.DISPLAY_IME_POLICY_LOCAL
+            } else {
+                android.view.WindowManagerHidden.DISPLAY_IME_POLICY_FALLBACK_DISPLAY
+            }
             runCatching { client.setDisplayImePolicy(clientId, displayId, policy) }
                 .onFailure { Log.w(TAG, "setDisplayImePolicy failed displayId=$displayId", it) }
             if (!createdCallbackSent) {
@@ -364,6 +379,110 @@ class SystemUiAppWindow(
     private fun contentHeight(windowHeight: Int): Int {
         val bar = binding.bottomBar.height
         return if (bar > 0) (windowHeight - bar).coerceAtLeast(1) else binding.viewTexture.height
+    }
+
+    // --- IME: nhích lên (dọc) / thu chiều cao (ngang), trả lại khi IME đóng ---
+
+    private fun startImeWatcher() {
+        stopImeWatcher()
+        val imm = context.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+        val method = runCatching {
+            imm?.javaClass?.getMethod("getInputMethodWindowVisibleHeight")?.apply { isAccessible = true }
+        }.getOrNull()
+        if (imm == null || method == null) {
+            Log.w(TAG, "IME height API unavailable; IME adjust disabled")
+            return
+        }
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        val watcher = object : Runnable {
+            override fun run() {
+                if (destroyed) return
+                val height = runCatching { (method.invoke(imm) as? Int) ?: 0 }.getOrDefault(0)
+                applyImeState(height)
+                handler.postDelayed(this, 150L)
+            }
+        }
+        imeWatcher = watcher
+        handler.post(watcher)
+    }
+
+    private fun stopImeWatcher() {
+        imeWatcher = null
+    }
+
+    private fun applyImeState(imeHeight: Int) {
+        val visible = imeHeight > 0
+        if (visible == imeVisible) return
+        imeVisible = visible
+        val metrics = context.resources.displayMetrics
+        val portrait = context.resources.configuration.orientation ==
+            android.content.res.Configuration.ORIENTATION_PORTRAIT
+        val lp = currentParams()
+        if (visible) {
+            val imeTop = (metrics.heightPixels - imeHeight).coerceAtLeast(0)
+            if (portrait) {
+                if (lp.y + lp.height > imeTop) {
+                    val targetY = (imeTop - lp.height).coerceAtLeast(0)
+                    Log.d(TAG, "IME h=$imeHeight: shift y ${lp.y} -> $targetY")
+                    animateWindowY(lp.y, targetY)
+                }
+            } else {
+                if (lp.y + lp.height > imeTop) {
+                    val targetH = (imeTop - lp.y).coerceAtLeast(minHeight)
+                    Log.d(TAG, "IME h=$imeHeight: shrink height ${lp.height} -> $targetH")
+                    animateWindowHeight(lp.height, targetH)
+                }
+            }
+        } else {
+            if (portrait) {
+                if (lp.y != baseY) {
+                    Log.d(TAG, "IME hidden: restore y ${lp.y} -> $baseY")
+                    animateWindowY(lp.y, baseY)
+                }
+            } else {
+                if (lp.height != baseHeight) {
+                    Log.d(TAG, "IME hidden: restore height ${lp.height} -> $baseHeight")
+                    animateWindowHeight(lp.height, baseHeight)
+                }
+            }
+        }
+    }
+
+    private fun animateWindowY(from: Int, to: Int) {
+        if (destroyed || from == to) return
+        imeAnimator?.cancel()
+        val lp = currentParams()
+        imeAnimator = android.animation.ValueAnimator.ofInt(from, to).apply {
+            duration = 180L
+            addUpdateListener {
+                if (destroyed) return@addUpdateListener
+                lp.y = it.animatedValue as Int
+                runCatching { wm.updateViewLayout(binding.root, lp) }
+            }
+            start()
+        }
+    }
+
+    private fun animateWindowHeight(from: Int, to: Int) {
+        if (destroyed || from == to) return
+        imeAnimator?.cancel()
+        val lp = currentParams()
+        imeAnimator = android.animation.ValueAnimator.ofInt(from, to).apply {
+            duration = 180L
+            addUpdateListener {
+                if (destroyed) return@addUpdateListener
+                lp.height = it.animatedValue as Int
+                runCatching { wm.updateViewLayout(binding.root, lp) }
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (destroyed) return
+                    baseHeight = lp.height
+                    commitVirtualDisplaySize(lp.width, contentHeight(lp.height))
+                }
+            })
+            start()
+        }
     }
 
     private fun cancelPendingResizeCommit() {
@@ -436,6 +555,7 @@ class SystemUiAppWindow(
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     dragging = false
+                    if (!imeVisible) baseY = currentParams().y
                     return true
                 }
             }
@@ -605,6 +725,7 @@ class SystemUiAppWindow(
                     Log.d("CONTROL_TOUCH", "resize commit lp=${lp.width}x${lp.height} root=${binding.root.width}x${binding.root.height} texture=${binding.viewTexture.width}x${binding.viewTexture.height}")
                     resizeGestureActive = false
                     commitVirtualDisplaySize(targetWidth, contentHeight(targetHeight))
+                    if (!imeVisible) baseHeight = targetHeight
                     return true
                 }
                 MotionEvent.ACTION_CANCEL -> {
