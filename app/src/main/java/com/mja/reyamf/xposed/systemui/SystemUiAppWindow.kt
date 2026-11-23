@@ -414,34 +414,40 @@ class SystemUiAppWindow(
         val visible = imeHeight > 0
         if (visible == imeVisible) return
         imeVisible = visible
-        val metrics = context.resources.displayMetrics
-        val portrait = context.resources.configuration.orientation ==
-            android.content.res.Configuration.ORIENTATION_PORTRAIT
+        // KHÔNG dùng context.resources (display context tạo lúc mở cửa sổ, metrics/orientation
+        // không cập nhật sau khi xoay). Lấy trực tiếp từ Display của display 0.
+        val dm = context.getSystemService(DisplayManager::class.java)
+        val display = dm?.getDisplay(Display.DEFAULT_DISPLAY)
+        val size = android.graphics.Point().also { display?.getRealSize(it) }
+        val screenHeight = if (size.y > 0) size.y else context.resources.displayMetrics.heightPixels
+        val rotation = display?.rotation ?: Surface.ROTATION_0
+        val portrait = rotation == Surface.ROTATION_0 || rotation == Surface.ROTATION_180
         val lp = currentParams()
+        Log.d(TAG, "IME state visible=$visible h=$imeHeight screen=$screenHeight rotation=$rotation lp=${lp.y}/${lp.height}")
         if (visible) {
-            val imeTop = (metrics.heightPixels - imeHeight).coerceAtLeast(0)
+            val imeTop = (screenHeight - imeHeight).coerceAtLeast(0)
             if (portrait) {
                 if (lp.y + lp.height > imeTop) {
                     val targetY = (imeTop - lp.height).coerceAtLeast(0)
-                    Log.d(TAG, "IME h=$imeHeight: shift y ${lp.y} -> $targetY")
+                    Log.d(TAG, "IME shift y ${lp.y} -> $targetY")
                     animateWindowY(lp.y, targetY)
                 }
             } else {
                 if (lp.y + lp.height > imeTop) {
                     val targetH = (imeTop - lp.y).coerceAtLeast(minHeight)
-                    Log.d(TAG, "IME h=$imeHeight: shrink height ${lp.height} -> $targetH")
+                    Log.d(TAG, "IME shrink height ${lp.height} -> $targetH")
                     animateWindowHeight(lp.height, targetH)
                 }
             }
         } else {
             if (portrait) {
                 if (lp.y != baseY) {
-                    Log.d(TAG, "IME hidden: restore y ${lp.y} -> $baseY")
+                    Log.d(TAG, "IME restore y ${lp.y} -> $baseY")
                     animateWindowY(lp.y, baseY)
                 }
             } else {
                 if (lp.height != baseHeight) {
-                    Log.d(TAG, "IME hidden: restore height ${lp.height} -> $baseHeight")
+                    Log.d(TAG, "IME restore height ${lp.height} -> $baseHeight")
                     animateWindowHeight(lp.height, baseHeight)
                 }
             }
