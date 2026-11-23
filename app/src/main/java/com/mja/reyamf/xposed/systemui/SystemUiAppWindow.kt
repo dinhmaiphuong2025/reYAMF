@@ -444,13 +444,13 @@ class SystemUiAppWindow(
 
     private fun createBottomBarListener(): View.OnTouchListener = object : View.OnTouchListener {
         private var downRawY = 0f
-        private var hapticArmed = false
+        private var armedDir = 0   // 0 = chưa, 1 = fullscreen (kéo xuống), -1 = đóng (kéo lên)
 
         override fun onTouch(v: View, event: MotionEvent): Boolean {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downRawY = event.rawY
-                    hapticArmed = false
+                    armedDir = 0
                     Log.d("CONTROL_TOUCH", "bottomBar down rawY=${event.rawY}")
                     return true
                 }
@@ -458,23 +458,29 @@ class SystemUiAppWindow(
                     val dy = event.rawY - downRawY
                     when {
                         dy > 0 -> {
-                            // Kéo xuống: phóng to dần, đủ ngưỡng thì rung báo "thả = fullscreen".
                             val p = (dy / BOTTOM_SWIPE_DOWN_FULLSCREEN_PX).coerceIn(0f, 1f)
                             applyGestureScale(1f + 0.06f * p)
-                            if (p >= 1f && !hapticArmed) {
-                                hapticArmed = true
+                            if (p >= 1f && armedDir != 1) {
+                                armedDir = 1
                                 vibrateFeedback()
                                 Log.d("CONTROL_TOUCH", "bottomBar armed FULLSCREEN")
+                            } else if (p < 0.6f && armedDir == 1) {
+                                armedDir = 0
+                                vibrateFeedback(12L)
+                                Log.d("CONTROL_TOUCH", "bottomBar disarmed (pulled back)")
                             }
                         }
                         dy < 0 -> {
-                            // Kéo lên: thu nhỏ dần, đủ ngưỡng thì rung báo "thả = đóng".
                             val p = (-dy / BOTTOM_SWIPE_UP_CLOSE_PX).coerceIn(0f, 1f)
                             applyGestureScale(1f - 0.10f * p)
-                            if (p >= 1f && !hapticArmed) {
-                                hapticArmed = true
+                            if (p >= 1f && armedDir != -1) {
+                                armedDir = -1
                                 vibrateFeedback()
                                 Log.d("CONTROL_TOUCH", "bottomBar armed CLOSE")
+                            } else if (p < 0.6f && armedDir == -1) {
+                                armedDir = 0
+                                vibrateFeedback(12L)
+                                Log.d("CONTROL_TOUCH", "bottomBar disarmed (pulled back)")
                             }
                         }
                     }
@@ -484,16 +490,19 @@ class SystemUiAppWindow(
                     val dy = event.rawY - downRawY
                     animateGestureScale(1f)
                     when {
-                        dy < -BOTTOM_SWIPE_UP_CLOSE_PX -> close()
-                        dy > BOTTOM_SWIPE_DOWN_FULLSCREEN_PX -> transitionTo(WindowState.FULLSCREEN)
+                        // Chỉ chốt khi vẫn còn armed VÀ vượt ngưỡng tại thời điểm thả.
+                        armedDir == 1 && dy > BOTTOM_SWIPE_DOWN_FULLSCREEN_PX ->
+                            transitionTo(WindowState.FULLSCREEN)
+                        armedDir == -1 && dy < -BOTTOM_SWIPE_UP_CLOSE_PX -> close()
                         abs(dy) < BOTTOM_TAP_BACK_PX -> sendBackKey()
+                        else -> Log.d("CONTROL_TOUCH", "bottomBar cancel dy=$dy armedDir=$armedDir")
                     }
-                    hapticArmed = false
+                    armedDir = 0
                     return true
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     animateGestureScale(1f)
-                    hapticArmed = false
+                    armedDir = 0
                     return true
                 }
             }
@@ -515,19 +524,19 @@ class SystemUiAppWindow(
         binding.root.animate().scaleX(target).scaleY(target).setDuration(140L).start()
     }
 
-    private fun vibrateFeedback() {
+    private fun vibrateFeedback(durationMs: Long = 25L) {
         runCatching {
             val vibrator = context.getSystemService(android.os.Vibrator::class.java) ?: return
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                 vibrator.vibrate(
                     android.os.VibrationEffect.createOneShot(
-                        25L,
+                        durationMs,
                         android.os.VibrationEffect.DEFAULT_AMPLITUDE
                     )
                 )
             } else {
                 @Suppress("DEPRECATION")
-                vibrator.vibrate(25L)
+                vibrator.vibrate(durationMs)
             }
         }
     }
