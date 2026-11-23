@@ -366,25 +366,28 @@ class SystemUiAppWindow(
         Log.d("SIZE_DEBUG", "applied vd=${width}x$height dpi=$newDpi displayId=$displayId")
     }
 
+    private fun contentHeight(windowHeight: Int): Int {
+        val bar = binding.bottomBar.height
+        return if (bar > 0) (windowHeight - bar).coerceAtLeast(1) else binding.viewTexture.height
+    }
+
     private fun cancelPendingResizeCommit() {
         resizeCommitRunnable?.let { binding.viewTexture.removeCallbacks(it) }
         resizeCommitRunnable = null
     }
 
-    private fun commitVirtualDisplaySize() {
+    private fun commitVirtualDisplaySize(width: Int, height: Int) {
         cancelPendingResizeCommit()
-        val texture = binding.viewTexture
         val commit = object : Runnable {
             override fun run() {
                 if (resizeCommitRunnable !== this) return
                 resizeCommitRunnable = null
-                Log.d("CONTROL_TOUCH", "resize commitRun destroyed=$destroyed active=$resizeGestureActive texture=${texture.width}x${texture.height}")
-                if (destroyed || resizeGestureActive || texture.width <= 0 || texture.height <= 0) return
-                applyVirtualDisplaySize(texture.width, texture.height)
+                if (destroyed || width <= 0 || height <= 0) return
+                applyVirtualDisplaySize(width, height)
             }
         }
         resizeCommitRunnable = commit
-        texture.postDelayed(commit, RESIZE_COMMIT_FALLBACK_MS)
+        binding.viewTexture.postDelayed(commit, RESIZE_COMMIT_FALLBACK_MS)
     }
 
     // --- Gestures ---
@@ -522,7 +525,7 @@ class SystemUiAppWindow(
                     wm.updateViewLayout(binding.root, lp)
                     Log.d("CONTROL_TOUCH", "resize commit lp=${lp.width}x${lp.height} root=${binding.root.width}x${binding.root.height} texture=${binding.viewTexture.width}x${binding.viewTexture.height}")
                     resizeGestureActive = false
-                    commitVirtualDisplaySize()
+                    commitVirtualDisplaySize(targetWidth, contentHeight(targetHeight))
                     moveToTopIfNeed(event)
                     return true
                 }
@@ -533,7 +536,7 @@ class SystemUiAppWindow(
                     lp.x = startWindowX
                     wm.updateViewLayout(binding.root, lp)
                     resizeGestureActive = false
-                    commitVirtualDisplaySize()
+                    commitVirtualDisplaySize(startWidth, contentHeight(startHeight))
                     return true
                 }
             }
