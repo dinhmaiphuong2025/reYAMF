@@ -236,9 +236,9 @@ object SystemUiConnector {
                     // Không dùng launchStartCommand: StartCmd.startAuto gọi TipUtil.showToast
                     // trong nhánh lỗi -> NPE trên Binder thread của system_server.
                     when {
-                        taskId > 0 -> client.moveTaskToDisplay(id, taskId, d)
+                        taskId > 0 -> iface.moveTaskToDisplay(id, taskId, d)
                         !componentName.isNullOrEmpty() ->
-                            client.startActivityOnDisplay(id, d, componentName, userId)
+                            iface.startActivityOnDisplay(id, d, componentName, userId)
                         else -> Log.w(TAG, "nothing to launch: taskId=$taskId comp=$componentName")
                     }
                 }.onFailure { Log.e(TAG, "launch task failed displayId=$d", it) }
