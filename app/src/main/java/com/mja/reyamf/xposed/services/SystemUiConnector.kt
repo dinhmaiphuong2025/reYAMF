@@ -204,9 +204,13 @@ object SystemUiConnector {
         val iface = manager ?: return
         val id = clientId
         if (id <= 0) return
+        // Stage 3b: một cửa sổ duy nhất — đóng sạch mọi cửa sổ cũ trước khi tạo mới,
+        // tránh khung cũ còn sót khi task bị Back.
         if (windows.isNotEmpty()) {
-            Log.d(TAG, "createWindow ignored: ${windows.size} window(s) already open")
-            return
+            val stale = windows.values.toList()
+            windows.clear()
+            stale.forEach { runCatching { it.onDestroy() } }
+            Log.d(TAG, "closed ${stale.size} existing window(s) before create")
         }
         runCatching {
             val dm = ctx.getSystemService(DisplayManager::class.java) ?: error("no DisplayManager")

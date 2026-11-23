@@ -89,6 +89,7 @@ class SystemUiAppWindow(
     private var state = WindowState.NORMAL
     private var quickMenuHideJob: Job? = null
     private var imeAnimator: android.animation.ValueAnimator? = null
+    private var lastImeInset = -1
     private var imeVisible = false
     private var baseY = 0
     private var baseHeight = 0
@@ -146,7 +147,10 @@ class SystemUiAppWindow(
                     WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
                     WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM,
             PixelFormat.TRANSLUCENT
-        )
+        ).apply {
+            // Tự điều chỉnh khi IME mở; không để WMS pan/resize cửa sổ làm IME bị đóng.
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+        }
 
         val displayManager = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         val display = displayManager.getDisplay(Display.DEFAULT_DISPLAY)
@@ -166,8 +170,11 @@ class SystemUiAppWindow(
         wm.addView(binding.root, params)
         binding.root.setOnApplyWindowInsetsListener { v, insets ->
             val imeBottom = insets.getInsets(android.view.WindowInsets.Type.ime()).bottom
-            Log.d("IME_PROBE", "windowInsets imeBottom=$imeBottom")
-            applyImeState(imeBottom)
+            if (imeBottom != lastImeInset) {
+                lastImeInset = imeBottom
+                Log.d("IME_PROBE", "windowInsets imeBottom=$imeBottom")
+                applyImeState(imeBottom)
+            }
             insets
         }
         binding.root.requestApplyInsets()
@@ -401,10 +408,11 @@ class SystemUiAppWindow(
         Log.d(TAG, "IME state visible=$visible overlap=$imeOverlap screen=$screenHeight rotation=$rotation lp=${lp.y}/${lp.height}")
         if (visible) {
             if (portrait) {
-                // Dọc: nhích cả cửa sổ lên để nằm trọn trên bàn phím.
-                val targetY = (screenHeight - imeOverlap - lp.height).coerceAtLeast(0)
+                // Dọc: chỉ nhích LÊN khi cửa sổ bị bàn phím che; không bao giờ đẩy xuống.
+                val maxY = (screenHeight - imeOverlap - lp.height).coerceAtLeast(0)
+                val targetY = minOf(lp.y, maxY)
                 if (targetY != lp.y) {
-                    Log.d(TAG, "IME shift y ${lp.y} -> $targetY")
+                    Log.d(TAG, "IME shift y ${lp.y} -> $targetY (maxY=$maxY)")
                     animateWindowY(lp.y, targetY)
                 }
             } else {

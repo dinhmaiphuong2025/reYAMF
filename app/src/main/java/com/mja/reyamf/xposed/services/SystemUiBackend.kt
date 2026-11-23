@@ -96,11 +96,26 @@ object SystemUiBackend {
         val count: Int
         val changed: Boolean
         synchronized(lock) {
+            pruneStaleWindowsLocked()
             changed = !windowList.contains(displayId)
             if (changed) windowList.add(0, displayId)
             count = windowList.size
         }
         if (changed) notifyCount(count)
+    }
+
+    /** Bỏ các display đã bị huỷ khỏi windowList (VD do client chết hoặc cửa sổ đóng sót). */
+    private fun pruneStaleWindowsLocked() {
+        if (windowList.isEmpty()) return
+        val it = windowList.iterator()
+        while (it.hasNext()) {
+            val id = it.next()
+            val alive = runCatching { Instances.displayManager.getDisplay(id) != null }.getOrDefault(true)
+            if (!alive) {
+                it.remove()
+                taskToDisplay.entries.removeAll { e -> e.value == id }
+            }
+        }
     }
 
     fun removeWindow(displayId: Int) {
@@ -288,12 +303,16 @@ object SystemUiBackend {
         client.displays.toList().forEach { displayId ->
             val vd = displays.remove(displayId)
             displayOwners.remove(displayId)
+            windowList.remove(displayId)
+            taskToDisplay.entries.removeAll { it.value == displayId }
             runCatching { vd?.surface = null }
             runCatching { vd?.release() }
             client.surfaces.remove(displayId)?.let { runCatching { it.release() } }
             Log.d(TAG, "released displayId=$displayId of clientId=$clientId")
         }
         client.displays.clear()
+        if (windowList.isEmpty()) unregisterTaskListenerLocked()
+        notifyCount(windowList.size)
     }
 
     fun createVirtualDisplay(
