@@ -186,33 +186,51 @@ object SystemUiBackend {
         }
     }
 
+    /**
+     * Chạy thao tác đặc quyền với identity của system_server.
+     *
+     * Backend chạy trên chính Binder thread của SystemUI, nên Binder.getCallingUid()
+     * vẫn là uid SystemUI (10180) trong khi package là "android" -> ATMS/WMS/IMS
+     * từ chối ("package=android does not belong to uid=10180").
+     */
+    private inline fun <T> asSystem(block: () -> T): T {
+        val token = Binder.clearCallingIdentity()
+        return try {
+            block()
+        } finally {
+            Binder.restoreCallingIdentity(token)
+        }
+    }
+
     fun startActivityOnDisplay(clientId: Long, displayId: Int, componentName: String, userId: Int) {
         synchronized(lock) { ownedClient(clientId, displayId) ?: return }
         val component = ComponentName.unflattenFromString(componentName) ?: run {
             Log.w(TAG, "startActivityOnDisplay: bad component '$componentName'")
             return
         }
-        startActivity(Instances.systemContext, component, userId, displayId)
+        asSystem { startActivity(Instances.systemContext, component, userId, displayId) }
     }
 
     fun moveTaskToDisplay(clientId: Long, taskId: Int, displayId: Int) {
         synchronized(lock) { ownedClient(clientId, displayId) ?: return }
-        moveTask(taskId, displayId)
+        asSystem { moveTask(taskId, displayId) }
     }
 
     fun moveTaskToDefaultDisplay(clientId: Long, taskId: Int) {
         synchronized(lock) {
             if (clients[clientId] == null) return
-            moveTask(taskId, 0)
+            asSystem { moveTask(taskId, 0) }
         }
     }
 
     fun closeTask(clientId: Long, taskId: Int) {
         synchronized(lock) { if (clients[clientId] == null) return }
         runCatching {
-            Instances.activityTaskManager.invokeMethod(
-                "removeTask", args(taskId), argTypes(Integer.TYPE)
-            )
+            asSystem {
+                Instances.activityTaskManager.invokeMethod(
+                    "removeTask", args(taskId), argTypes(Integer.TYPE)
+                )
+            }
         }.onFailure { Log.w(TAG, "closeTask failed taskId=$taskId", it) }
     }
 
@@ -229,7 +247,9 @@ object SystemUiBackend {
 
     fun setDisplayImePolicy(clientId: Long, displayId: Int, policy: Int) {
         synchronized(lock) { ownedClient(clientId, displayId) ?: return }
-        (Instances.windowManager as WindowManagerHidden).setDisplayImePolicy(displayId, policy)
+        asSystem {
+            (Instances.windowManager as WindowManagerHidden).setDisplayImePolicy(displayId, policy)
+        }
     }
 
     fun injectMotionEvent(clientId: Long, displayId: Int, event: MotionEvent?) {
@@ -237,8 +257,10 @@ object SystemUiBackend {
         synchronized(lock) { ownedClient(clientId, displayId) ?: return }
         val clone = MotionEvent.obtain(event)
         try {
-            clone.invokeMethod("setDisplayId", args(displayId), argTypes(Integer.TYPE))
-            Instances.inputManager.injectInputEvent(clone, 0)
+            asSystem {
+                clone.invokeMethod("setDisplayId", args(displayId), argTypes(Integer.TYPE))
+                Instances.inputManager.injectInputEvent(clone, 0)
+            }
         } finally {
             clone.recycle()
             event.recycle()
@@ -256,7 +278,7 @@ object SystemUiBackend {
                 0
             )
             keyEvent.invokeMethod("setDisplayId", args(displayId), argTypes(Integer.TYPE))
-            Instances.inputManager.injectInputEvent(keyEvent, 0)
+            asSystem { Instances.inputManager.injectInputEvent(keyEvent, 0) }
         }
         inject(KeyEvent.ACTION_DOWN)
         inject(KeyEvent.ACTION_UP)
