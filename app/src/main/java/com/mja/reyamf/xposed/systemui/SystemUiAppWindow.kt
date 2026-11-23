@@ -378,6 +378,7 @@ class SystemUiAppWindow(
             override fun run() {
                 if (resizeCommitRunnable !== this) return
                 resizeCommitRunnable = null
+                Log.d("CONTROL_TOUCH", "resize commitRun destroyed=$destroyed active=$resizeGestureActive texture=${texture.width}x${texture.height}")
                 if (destroyed || resizeGestureActive || texture.width <= 0 || texture.height <= 0) return
                 applyVirtualDisplaySize(texture.width, texture.height)
             }
@@ -519,6 +520,7 @@ class SystemUiAppWindow(
                     lp.height = targetHeight
                     if (isLeft) lp.x = targetWindowX
                     wm.updateViewLayout(binding.root, lp)
+                    Log.d("CONTROL_TOUCH", "resize commit lp=${lp.width}x${lp.height} root=${binding.root.width}x${binding.root.height} texture=${binding.viewTexture.width}x${binding.viewTexture.height}")
                     resizeGestureActive = false
                     commitVirtualDisplaySize()
                     moveToTopIfNeed(event)
