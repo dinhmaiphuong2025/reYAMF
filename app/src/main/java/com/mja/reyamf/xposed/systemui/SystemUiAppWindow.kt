@@ -240,6 +240,11 @@ class SystemUiAppWindow(
         cancelPendingResizeCommit()
         quickMenuHideJob?.cancel()
         quickMenuHideJob = null
+        runCatching { binding.root.animate().cancel() }
+        runCatching {
+            binding.root.scaleX = 1f
+            binding.root.scaleY = 1f
+        }
         if (displayId >= 0) {
             runCatching { virtualDisplay?.release() }
             virtualDisplay = null
@@ -247,17 +252,6 @@ class SystemUiAppWindow(
             onClosed(displayId)
         }
         runCatching { wm.removeView(binding.root) }
-    }
-
-    private fun moveToTop() {
-        runCatching {
-            wm.removeView(binding.root)
-            wm.addView(binding.root, binding.root.layoutParams)
-        }.onFailure { Log.w(TAG, "moveToTop failed", it) }
-    }
-
-    private fun moveToTopIfNeed(event: MotionEvent) {
-        if (event.actionMasked == MotionEvent.ACTION_UP) moveToTop()
     }
 
     private fun currentParams() = binding.root.layoutParams as WindowManager.LayoutParams
@@ -441,7 +435,6 @@ class SystemUiAppWindow(
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     dragging = false
-                    moveToTopIfNeed(event)
                     return true
                 }
             }
@@ -451,27 +444,91 @@ class SystemUiAppWindow(
 
     private fun createBottomBarListener(): View.OnTouchListener = object : View.OnTouchListener {
         private var downRawY = 0f
+        private var hapticArmed = false
 
         override fun onTouch(v: View, event: MotionEvent): Boolean {
-            Log.d("CONTROL_TOUCH", "bottomBar action=${event.actionMasked} x=${event.x} y=${event.y} rawX=${event.rawX} rawY=${event.rawY}")
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downRawY = event.rawY
+                    hapticArmed = false
+                    Log.d("CONTROL_TOUCH", "bottomBar down rawY=${event.rawY}")
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dy = event.rawY - downRawY
+                    when {
+                        dy > 0 -> {
+                            // Kéo xuống: phóng to dần, đủ ngưỡng thì rung báo "thả = fullscreen".
+                            val p = (dy / BOTTOM_SWIPE_DOWN_FULLSCREEN_PX).coerceIn(0f, 1f)
+                            applyGestureScale(1f + 0.06f * p)
+                            if (p >= 1f && !hapticArmed) {
+                                hapticArmed = true
+                                vibrateFeedback()
+                                Log.d("CONTROL_TOUCH", "bottomBar armed FULLSCREEN")
+                            }
+                        }
+                        dy < 0 -> {
+                            // Kéo lên: thu nhỏ dần, đủ ngưỡng thì rung báo "thả = đóng".
+                            val p = (-dy / BOTTOM_SWIPE_UP_CLOSE_PX).coerceIn(0f, 1f)
+                            applyGestureScale(1f - 0.10f * p)
+                            if (p >= 1f && !hapticArmed) {
+                                hapticArmed = true
+                                vibrateFeedback()
+                                Log.d("CONTROL_TOUCH", "bottomBar armed CLOSE")
+                            }
+                        }
+                    }
                     return true
                 }
                 MotionEvent.ACTION_UP -> {
                     val dy = event.rawY - downRawY
+                    animateGestureScale(1f)
                     when {
                         dy < -BOTTOM_SWIPE_UP_CLOSE_PX -> close()
                         dy > BOTTOM_SWIPE_DOWN_FULLSCREEN_PX -> transitionTo(WindowState.FULLSCREEN)
                         abs(dy) < BOTTOM_TAP_BACK_PX -> sendBackKey()
                     }
-                    if (!destroyed) moveToTopIfNeed(event)
+                    hapticArmed = false
                     return true
                 }
-                MotionEvent.ACTION_CANCEL -> return true
+                MotionEvent.ACTION_CANCEL -> {
+                    animateGestureScale(1f)
+                    hapticArmed = false
+                    return true
+                }
             }
             return true
+        }
+    }
+
+    /** Scale tạm thời khi kéo thanh cử chỉ (không đổi LayoutParams). */
+    private fun applyGestureScale(scale: Float) {
+        if (destroyed) return
+        binding.root.pivotX = binding.root.width / 2f
+        binding.root.pivotY = binding.root.height / 2f
+        binding.root.scaleX = scale
+        binding.root.scaleY = scale
+    }
+
+    private fun animateGestureScale(target: Float) {
+        if (destroyed) return
+        binding.root.animate().scaleX(target).scaleY(target).setDuration(140L).start()
+    }
+
+    private fun vibrateFeedback() {
+        runCatching {
+            val vibrator = context.getSystemService(android.os.Vibrator::class.java) ?: return
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                vibrator.vibrate(
+                    android.os.VibrationEffect.createOneShot(
+                        25L,
+                        android.os.VibrationEffect.DEFAULT_AMPLITUDE
+                    )
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(25L)
+            }
         }
     }
 
@@ -526,7 +583,6 @@ class SystemUiAppWindow(
                     Log.d("CONTROL_TOUCH", "resize commit lp=${lp.width}x${lp.height} root=${binding.root.width}x${binding.root.height} texture=${binding.viewTexture.width}x${binding.viewTexture.height}")
                     resizeGestureActive = false
                     commitVirtualDisplaySize(targetWidth, contentHeight(targetHeight))
-                    moveToTopIfNeed(event)
                     return true
                 }
                 MotionEvent.ACTION_CANCEL -> {
@@ -577,7 +633,6 @@ class SystemUiAppWindow(
                 hideQuickMenu()
             }
             forwardMotionEvent(event)
-            moveToTopIfNeed(event)
             return true
         }
     }
