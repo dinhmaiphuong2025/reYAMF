@@ -88,7 +88,6 @@ class SystemUiAppWindow(
 
     private var state = WindowState.NORMAL
     private var quickMenuHideJob: Job? = null
-    private var imeWatcher: Runnable? = null
     private var imeAnimator: android.animation.ValueAnimator? = null
     private var imeVisible = false
     private var baseY = 0
@@ -168,12 +167,12 @@ class SystemUiAppWindow(
         binding.root.setOnApplyWindowInsetsListener { v, insets ->
             val imeBottom = insets.getInsets(android.view.WindowInsets.Type.ime()).bottom
             Log.d("IME_PROBE", "windowInsets imeBottom=$imeBottom")
+            applyImeState(imeBottom)
             insets
         }
         binding.root.requestApplyInsets()
         baseY = params.y
         baseHeight = params.height
-        startImeWatcher()
 
         binding.topHandle.setOnTouchListener(createTopHandleListener())
         binding.bottomBar.setOnTouchListener(createBottomBarListener())
@@ -253,7 +252,6 @@ class SystemUiAppWindow(
         if (destroyed) return
         destroyed = true
         cancelPendingResizeCommit()
-        stopImeWatcher()
         imeAnimator?.cancel()
         imeAnimator = null
         quickMenuHideJob?.cancel()
@@ -389,75 +387,31 @@ class SystemUiAppWindow(
 
     // --- IME: nhích lên (dọc) / thu chiều cao (ngang), trả lại khi IME đóng ---
 
-    private fun startImeWatcher() {
-        stopImeWatcher()
-        val imm = context.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
-        val method = runCatching {
-            imm?.javaClass?.getMethod("getInputMethodWindowVisibleHeight")?.apply { isAccessible = true }
-        }.getOrNull()
-        if (imm == null || method == null) {
-            Log.w(TAG, "IME height API unavailable; IME adjust disabled")
-            return
-        }
-        val handler = android.os.Handler(android.os.Looper.getMainLooper())
-        var lastProbe = -1
-        val watcher = object : Runnable {
-            override fun run() {
-                if (destroyed) return
-                val height = runCatching { (method.invoke(imm) as? Int) ?: 0 }.getOrDefault(0)
-                if (height != lastProbe) {
-                    lastProbe = height
-                    Log.d("IME_PROBE", "getInputMethodWindowVisibleHeight=$height")
-                }
-                applyImeState(height)
-                handler.postDelayed(this, 150L)
-            }
-        }
-        imeWatcher = watcher
-        handler.post(watcher)
-    }
-
-    private fun stopImeWatcher() {
-        imeWatcher = null
-    }
-
-    private fun applyImeState(imeHeight: Int) {
-        val visible = imeHeight > 0
+    private fun applyImeState(imeOverlap: Int) {
+        val visible = imeOverlap > 0
         if (visible == imeVisible) return
         imeVisible = visible
-        // Lấy thông số sống từ Display của chính view (display context tạo lúc mở cửa sổ
-        // giữ metrics/orientation cũ sau khi xoay).
+        // Kích thước màn hình lấy từ Display của chính view (display-context giữ metrics cũ).
         val display = binding.root.display
         val size = android.graphics.Point().also { display?.getRealSize(it) }
-        val metrics = runCatching { wm.maximumWindowMetrics.bounds }.getOrNull()
-        val screenHeight = when {
-            size.y > 0 -> size.y
-            metrics != null && metrics.height() > 0 -> metrics.height()
-            else -> context.resources.displayMetrics.heightPixels
-        }
+        val screenHeight = if (size.y > 0) size.y else context.resources.displayMetrics.heightPixels
         val rotation = display?.rotation ?: Surface.ROTATION_0
         val portrait = rotation == Surface.ROTATION_0 || rotation == Surface.ROTATION_180
         val lp = currentParams()
-        Log.d(TAG, "IME state visible=$visible h=$imeHeight screen=$screenHeight rotation=$rotation lp=${lp.y}/${lp.height}")
+        Log.d(TAG, "IME state visible=$visible overlap=$imeOverlap screen=$screenHeight rotation=$rotation lp=${lp.y}/${lp.height}")
         if (visible) {
-            val imeTop = (screenHeight - imeHeight).coerceAtLeast(0)
             if (portrait) {
-                if (lp.y + lp.height > imeTop) {
-                    val targetY = (imeTop - lp.height).coerceAtLeast(0)
+                // Dọc: nhích cả cửa sổ lên để nằm trọn trên bàn phím.
+                val targetY = (screenHeight - imeOverlap - lp.height).coerceAtLeast(0)
+                if (targetY != lp.y) {
                     Log.d(TAG, "IME shift y ${lp.y} -> $targetY")
                     animateWindowY(lp.y, targetY)
                 }
             } else {
-                // Ngang: đưa cửa sổ lên sát đỉnh rồi thu chiều cao vừa phần còn lại.
-                if (lp.y != 0) {
-                    lp.y = 0
-                    runCatching { wm.updateViewLayout(binding.root, lp) }
-                }
-                val targetH = imeTop.coerceAtMost(baseHeight).coerceAtLeast(
-                    minHeight.coerceAtMost(imeTop.coerceAtLeast(1))
-                )
-                if (lp.height != targetH) {
-                    Log.d(TAG, "IME shrink height ${lp.height} -> $targetH (imeTop=$imeTop)")
+                // Ngang: giữ nguyên đỉnh, thu chiều cao bớt đúng phần bàn phím chiếm.
+                val targetH = (lp.height - imeOverlap).coerceAtLeast(minHeight)
+                if (targetH != lp.height) {
+                    Log.d(TAG, "IME shrink height ${lp.height} -> $targetH")
                     animateWindowHeight(lp.height, targetH)
                 }
             }
@@ -472,7 +426,6 @@ class SystemUiAppWindow(
                     Log.d(TAG, "IME restore height ${lp.height} -> $baseHeight")
                     animateWindowHeight(lp.height, baseHeight)
                 }
-                if (lp.y != baseY) animateWindowY(lp.y, baseY)
             }
         }
     }
