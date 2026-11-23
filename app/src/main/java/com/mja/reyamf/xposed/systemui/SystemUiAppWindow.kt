@@ -165,6 +165,12 @@ class SystemUiAppWindow(
         }
 
         wm.addView(binding.root, params)
+        binding.root.setOnApplyWindowInsetsListener { v, insets ->
+            val imeBottom = insets.getInsets(android.view.WindowInsets.Type.ime()).bottom
+            Log.d("IME_PROBE", "windowInsets imeBottom=$imeBottom")
+            insets
+        }
+        binding.root.requestApplyInsets()
         baseY = params.y
         baseHeight = params.height
         startImeWatcher()
@@ -394,10 +400,15 @@ class SystemUiAppWindow(
             return
         }
         val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        var lastProbe = -1
         val watcher = object : Runnable {
             override fun run() {
                 if (destroyed) return
                 val height = runCatching { (method.invoke(imm) as? Int) ?: 0 }.getOrDefault(0)
+                if (height != lastProbe) {
+                    lastProbe = height
+                    Log.d("IME_PROBE", "getInputMethodWindowVisibleHeight=$height")
+                }
                 applyImeState(height)
                 handler.postDelayed(this, 150L)
             }
