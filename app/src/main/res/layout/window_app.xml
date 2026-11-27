@@ -107,8 +107,8 @@
 
             <View
                 android:id="@+id/resizeBottomLeft"
-                android:layout_width="32dp"
-                android:layout_height="32dp"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
                 android:layout_gravity="bottom|start"
                 android:background="@android:color/transparent"
                 android:clickable="true"
@@ -117,8 +117,8 @@
 
             <View
                 android:id="@+id/resizeBottomRight"
-                android:layout_width="32dp"
-                android:layout_height="32dp"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
                 android:layout_gravity="bottom|end"
                 android:background="@android:color/transparent"
                 android:clickable="true"
@@ -129,15 +129,16 @@
         <FrameLayout
             android:id="@+id/bottomBar"
             android:layout_width="wrap_content"
-            android:layout_height="16dp"
+            android:layout_height="12dp"
             android:layout_gravity="center_horizontal"
+            android:layout_marginBottom="6dp"
             android:background="?attr/colorSurface"
             android:clickable="true"
             android:focusable="false">
 
             <View
-                android:layout_width="64dp"
-                android:layout_height="5dp"
+                android:layout_width="72dp"
+                android:layout_height="6dp"
                 android:layout_gravity="center"
                 android:background="@drawable/bg_pill_handle" />
         </FrameLayout>

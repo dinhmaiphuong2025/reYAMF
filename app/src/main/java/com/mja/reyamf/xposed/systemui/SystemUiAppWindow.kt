@@ -221,6 +221,20 @@ class SystemUiAppWindow(
             }
             Log.d("CONTROL_TOUCH", "post: topHandle ${viewState(binding.topHandle)}")
             Log.d("CONTROL_TOUCH", "post: bottomBar ${viewState(binding.bottomBar)}")
+            // Loại vùng điều khiển khỏi gesture của hệ thống (back/home vuốt cạnh, đáy),
+            // nếu không ở màn ngang vùng cạnh/đáy sẽ nuốt touch của pill và 2 góc resize.
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                listOf(
+                    binding.topHandle,
+                    binding.bottomBar,
+                    binding.resizeBottomLeft,
+                    binding.resizeBottomRight
+                ).forEach { view ->
+                    val r = Rect(0, 0, view.width, view.height)
+                    runCatching { view.systemGestureExclusionRects = listOf(r) }
+                        .onFailure { Log.d("CONTROL_TOUCH", "exclusion failed for ${view.id}", it) }
+                }
+            }
         }
     }
 
@@ -659,12 +673,13 @@ class SystemUiAppWindow(
         val attrs = android.os.VibrationAttributes.createForUsage(
             android.os.VibrationAttributes.USAGE_TOUCH
         )
-        runCatching {
-            vibrator.vibrate(
-                android.os.VibrationEffect.createOneShot(durationMs, 200),
-                attrs
-            )
-        }.onFailure { Log.w(TAG, "vibrate failed dur=$durationMs", it) }
+        val effect = android.os.VibrationEffect.createOneShot(durationMs, 200)
+        runCatching { vibrator.vibrate(effect, attrs) }
+            .onFailure {
+                Log.w(TAG, "vibrate(attrs) failed dur=$durationMs, retry plain", it)
+                runCatching { vibrator.vibrate(effect) }
+                    .onFailure { e2 -> Log.w(TAG, "vibrate failed dur=$durationMs", e2) }
+            }
     }
 
     private fun cornerResizeListener(isLeft: Boolean) = object : View.OnTouchListener {
